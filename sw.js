@@ -1,26 +1,31 @@
-// Service Worker: sorgt dafür, dass die App auch ohne Internet startet.
-// Strategie "erst Netz, dann Zwischenspeicher": online gibt es immer die
-// neueste Version, offline die zuletzt geladene.
-const CACHE = 'antrainieren-v5';
+// Service Worker: hält die App offline verfügbar und ermöglicht Updates per Hinweisbalken.
+// WICHTIG: Bei jeder neuen Version die Nummer in CACHE erhöhen, sonst wird kein Update erkannt.
+const CACHE = 'antrainieren-v6';
 const FILES = ['./', 'index.html', 'anleitung.html', 'app.css', 'app.js', 'daten.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png'];
 
+// Neue Version herunterladen (am Browser-Zwischenspeicher vorbei), aber noch nicht aktivieren
 self.addEventListener('install', e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(CACHE).then(c => c.addAll(FILES.map(f => new Request(f, { cache: 'reload' })))));
 });
+
+// Aktivieren erst, wenn in der App auf „Jetzt aktualisieren“ getippt wurde
+self.addEventListener('message', e => {
+  if (e.data === 'SKIP_WAITING') self.skipWaiting();
+});
+
 self.addEventListener('activate', e => {
   e.waitUntil(caches.keys()
     .then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
     .then(() => self.clients.claim()));
 });
+
+// Erst aus dem Speicher der installierten Version, sonst aus dem Netz
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET' || !e.request.url.startsWith(self.location.origin)) return;
   e.respondWith(
-    fetch(e.request)
-      .then(res => {
-        const copy = res.clone();
-        caches.open(CACHE).then(c => c.put(e.request, copy));
-        return res;
-      })
-      .catch(() => caches.match(e.request, { ignoreSearch: true }).then(r => r || caches.match('index.html')))
+    caches.open(CACHE).then(c => c.match(e.request, { ignoreSearch: true }).then(hit => hit || fetch(e.request).then(res => {
+      if (res.ok) c.put(e.request, res.clone());
+      return res;
+    }).catch(() => c.match('index.html'))))
   );
 });

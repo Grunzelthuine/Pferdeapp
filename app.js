@@ -525,7 +525,9 @@ function viewSettings() {
     <li><a href="#/einstellungen/uebungen">📋 <span>Übungen<span class="sub">${nEx} Übungen · Datenbank bearbeiten</span></span></a></li>
     <li><a href="#/einstellungen/daten">💾 <span>Daten sichern<span class="sub">Sicherung, Wiederherstellen, Zurücksetzen</span></span></a></li>
     <li><a href="anleitung.html">❓ <span>Anleitung<span class="sub">Installieren und Bedienung</span></span></a></li>
-  </ul></div>`;
+  </ul></div>
+  <div class="center"><button class="btn small" data-act="check-update">Nach Updates suchen</button>
+  <p class="muted small" id="appver"></p></div>`;
 }
 
 function viewGeneral() {
@@ -722,6 +724,8 @@ function render() {
   const openIdx = h === lastRoute ? [...document.querySelectorAll('#app details')].map(d => d.open) : [];
   $('#app').innerHTML = html;
   document.querySelectorAll('#app details').forEach((d, k) => { if (openIdx[k]) d.open = true; });
+  document.body.classList.toggle('in-training', a === 'training');
+  showVersion();
   const tb = $('[data-act="toggle-all"]');
   if (tb && [...document.querySelectorAll('#app .items details')].every(d => d.open)) tb.textContent = 'Alle zuklappen';
   if (h !== lastRoute) { window.scrollTo(0, 0); lastRoute = h; }
@@ -826,6 +830,20 @@ const actions = {
     const b = document.querySelector('[data-act="toggle-all"]');
     if (b) b.textContent = open ? 'Alle zuklappen' : 'Alle aufklappen';
   },
+  'do-update'() {
+    if (R && R.phase !== 'done') return toast('Bitte erst das Training beenden');
+    const w = swReg && swReg.waiting;
+    if (w) w.postMessage('SKIP_WAITING'); else location.reload();
+  },
+  async 'check-update'() {
+    if (!swReg) return toast('Updates sind nur in der installierten App möglich');
+    if (swReg.waiting) return showUpdateBar();
+    toast('Suche nach Updates …');
+    try { await swReg.update(); } catch (e) { return toast('Keine Verbindung, bitte später erneut versuchen'); }
+    if (swReg.installing) toast('Neue Version wird geladen …');
+    else if (swReg.waiting) showUpdateBar();
+    else toast('Du hast bereits die neueste Version');
+  },
   'start-run': startRun,
   'run-now'() { if (R.phase === 'speak') { R.token++; if ('speechSynthesis' in window) speechSynthesis.cancel(); startWork(); } },
   'run-pause'() {
@@ -924,7 +942,52 @@ if ('speechSynthesis' in window) {
   speechSynthesis.onvoiceschanged = () => { loadVoices(); if (location.hash.includes('allgemein')) render(); };
 }
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
+/* ---------- Updates ---------- */
+let swReg = null;
+function showUpdateBar() {
+  if ($('#updatebar')) return;
+  const bar = document.createElement('div');
+  bar.id = 'updatebar';
+  bar.innerHTML = `<span>🔄 Neue Version verfügbar</span><button class="btn small primary" data-act="do-update">Jetzt aktualisieren</button>`;
+  document.body.appendChild(bar);
+  document.body.classList.add('has-update');
+}
+function watchWorker(w) {
+  if (!w) return;
+  w.addEventListener('statechange', () => {
+    if (w.state === 'installed' && navigator.serviceWorker.controller) showUpdateBar();
+  });
+}
+function checkForUpdate() {
+  if (swReg) swReg.update().catch(() => {});
+}
+async function showVersion() {
+  const el = $('#appver');
+  if (!el || !('caches' in window)) return;
+  const keys = await caches.keys();
+  const vs = keys.map(k => +((k.match(/^antrainieren-v(\d+)$/) || [])[1] || 0)).filter(Boolean).sort((a, b) => b - a);
+  if (!vs.length) return;
+  const waiting = swReg && swReg.waiting;
+  el.textContent = waiting && vs.length > 1 ? `Version ${vs[1]} · Version ${vs[0]} bereit` : `Version ${vs[0]}`;
+}
 if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
-  navigator.serviceWorker.register('sw.js').catch(() => {});
+  navigator.serviceWorker.register('sw.js').then(reg => {
+    swReg = reg;
+    if (reg.waiting && navigator.serviceWorker.controller) showUpdateBar();
+    watchWorker(reg.installing);
+    reg.addEventListener('updatefound', () => watchWorker(reg.installing));
+    checkForUpdate();
+  }).catch(() => {});
+  // Nach dem Aktualisieren einmal neu laden, damit die neue Version läuft
+  let reloading = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloading || !document.body.classList.contains('has-update')) return;
+    reloading = true;
+    location.reload();
+  });
+  // Auch beim Zurückkehren in die App (iPhone/Android öffnen sie oft nur wieder) nach Updates suchen
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') checkForUpdate();
+  });
 }
 render();

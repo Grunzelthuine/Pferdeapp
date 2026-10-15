@@ -203,6 +203,16 @@ input[type=date]::-webkit-datetime-edit { padding: 0; }
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+#updatebar {
+  position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 20;
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  max-width: 616px; margin: 0 auto; padding: 10px 12px 10px 16px;
+  background: var(--text); color: var(--bg); border-radius: 14px; box-shadow: 0 4px 16px rgba(0,0,0,.25);
+  font-weight: 600;
+}
+#updatebar .btn { white-space: nowrap; flex: none; }
+body.has-update main { padding-bottom: 90px; }
+body.in-training #updatebar { display: none; }
 .hint { font-size: 14px; background: var(--accent-soft); border-radius: 10px; padding: 10px 12px; margin: 8px 0; }
 .center { text-align: center; }
 hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }

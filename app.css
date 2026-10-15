@@ -148,6 +148,14 @@ input[type=text], input[type=number], input[type=date], select, textarea {
   padding: 10px 12px; min-height: 44px;
 }
 textarea { min-height: 110px; resize: vertical; }
+/* iPhone/Safari: Datumsfelder haben sonst eine eigene Mindestbreite, ragen über den Rand und sind zentriert */
+input[type=date] {
+  -webkit-appearance: none; appearance: none;
+  display: block; min-width: 0; max-width: 100%;
+  text-align: left; line-height: 22px;
+}
+input[type=date]::-webkit-date-and-time-value { text-align: left; margin: 0; }
+input[type=date]::-webkit-datetime-edit { padding: 0; }
 .toggle { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); }
 .toggle:first-child { border-top: 0; }
 .toggle input { width: 24px; height: 24px; accent-color: var(--accent); flex: none; }

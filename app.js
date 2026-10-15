@@ -526,6 +526,7 @@ function voiceScore(v) {
   if (v.default) s += 2;
   return s;
 }
+const allVoiceCount = () => ('speechSynthesis' in window ? speechSynthesis.getVoices().length : 0);
 function loadVoices() {
   if (!('speechSynthesis' in window)) return;
   voices = speechSynthesis.getVoices().filter(v => /^de/i.test(v.lang)).sort((a, b) => voiceScore(b) - voiceScore(a));
@@ -620,8 +621,14 @@ function viewGeneral() {
     <label class="field"><span>Stimme</span><select data-bind="set.voice" data-test-voice>${voiceOpts}</select></label>
     <p class="note">Mit ★ markierte Stimmen klingen meist natürlicher. Welche Stimmen es gibt, hängt vom Gerät ab. Am PC sind sie oft roboterhaft, auf dem Handy meist deutlich besser.</p>
     <details class="small" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600">Bessere Stimme installieren</summary>
-      <p><b>iPhone:</b> Einstellungen › Bedienungshilfen › Gesprochene Inhalte › Stimmen › Deutsch. Dort eine Stimme mit „Premium“ oder „Erweitert“ laden, z. B. Anna. Danach die App neu öffnen und die Stimme hier auswählen.</p>
+      <p><b>iPhone:</b> Einstellungen › Bedienungshilfen › Gesprochene Inhalte › Stimmen › Deutsch. Dort eine Stimme mit „Premium“ oder „Erweitert“ laden, z. B. Anna. Danach die App ganz schließen (vom unteren Rand nach oben wischen und wegschieben), neu öffnen und die Stimme hier auswählen. Achtung: Nicht jede iOS-Version gibt Premium-Stimmen an Web-Apps weiter.</p>
       <p><b>Android:</b> Einstellungen › „Text-in-Sprache“ (meist unter Bedienungshilfen oder System › Sprache) › Bevorzugte Engine „Google-Sprachausgabe“ › Zahnrad › Sprachdaten installieren › Deutsch. Dort lässt sich auch die Stimme wählen.</p>
+    </details>
+    <details class="small" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600">Stimme fehlt? Liste prüfen</summary>
+      <p>Das Gerät meldet der App ${allVoiceCount()} Stimmen, davon ${voices.length} deutsche:</p>
+      <ul style="padding-left:20px">${voices.map(v => `<li>${esc(v.name)} <span class="muted">(${esc(v.lang)}${v.localService ? '' : ', online'})</span></li>`).join('') || '<li>keine</li>'}</ul>
+      <button class="btn small" data-act="reload-voices">Stimmenliste neu laden</button>
+      <p class="muted">Fehlt eine installierte Stimme hier auch nach Neustart der App, gibt das Handy sie nicht an Web-Apps weiter. Darauf hat die App keinen Einfluss.</p>
     </details>
     <label class="field"><span>Sprechtempo</span><select data-bind="set.rate" data-type="num" data-test-voice>
       ${[0.8, 0.9, 1, 1.1, 1.2].map(r => `<option value="${r}" ${Number(st.rate) === r ? 'selected' : ''}>${r === 1 ? 'normal' : num(r) + '×'}</option>`).join('')}
@@ -976,6 +983,7 @@ const actions = {
   },
   'run-close'() { R = null; prep = null; go('#/'); },
   'test-speak'() { speak('Führen in der Basisübung. Zehn Minuten. Nach der Hälfte Handwechsel.'); },
+  'reload-voices'() { loadVoices(); render(); toast(`${voices.length} deutsche Stimmen gefunden`); },
   'test-beep'() { unlockAudio(); beep('end'); },
   'ex-new'() {
     const id = newId('x');
@@ -1074,6 +1082,10 @@ load();
 if ('speechSynthesis' in window) {
   loadVoices();
   speechSynthesis.onvoiceschanged = () => { loadVoices(); if (location.hash.includes('allgemein')) render(); };
+  // Nach dem Installieren einer Stimme in den Handy-Einstellungen: beim Zurückkehren neu einlesen
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') { loadVoices(); if (location.hash.includes('allgemein')) render(); }
+  });
 }
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 /* ---------- Updates ---------- */

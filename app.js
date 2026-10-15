@@ -524,6 +524,7 @@ function viewSettings() {
     <li><a href="#/einstellungen/wochen">🗓 <span>Wochen<span class="sub">${S.weeks.length} Wochen · Tage mit Übungen belegen</span></span></a></li>
     <li><a href="#/einstellungen/uebungen">📋 <span>Übungen<span class="sub">${nEx} Übungen · Datenbank bearbeiten</span></span></a></li>
     <li><a href="#/einstellungen/daten">💾 <span>Daten sichern<span class="sub">Sicherung, Wiederherstellen, Zurücksetzen</span></span></a></li>
+    <li><a href="anleitung.html">❓ <span>Anleitung<span class="sub">Installieren und Bedienung</span></span></a></li>
   </ul></div>`;
 }
 

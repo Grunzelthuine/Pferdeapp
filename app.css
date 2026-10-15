@@ -204,6 +204,15 @@ input[type=date]::-webkit-datetime-edit { padding: 0; }
 }
 #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
+/* Akkuspar-Ansicht: echtes Schwarz, nur wenig dunkelgraue Schrift */
+#dim {
+  position: fixed; inset: 0; z-index: 100; background: #000;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+}
+#dim .dim-box { text-align: center; color: #555; transition: transform 1.5s ease; padding: 16px; max-width: 90vw; }
+#dim-time { font-size: 56px; font-weight: 700; font-variant-numeric: tabular-nums; color: #666; line-height: 1.1; }
+#dim-name { font-size: 16px; margin-top: 6px; }
+#dim .dim-hint { font-size: 12px; color: #333; margin-top: 14px; }
 #updatebar {
   position: fixed; left: 12px; right: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 20;
   display: flex; align-items: center; justify-content: space-between; gap: 12px;

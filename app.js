@@ -22,7 +22,7 @@ function freshState() {
     weeks: clone(SEED_WEEKS),
     program: { startDate: null, weekIds: SEED_WEEKS.map(w => w.id), log: {}, shifts: [] },
     settings: { pauseSec: 60, speak: true, beep: true, announceSwitch: true, rate: 1, voice: '',
-                lastBackup: '', firstUse: '', backupSnooze: '' }
+                dim: true, lastBackup: '', firstUse: '', backupSnooze: '' }
   };
 }
 function load() {
@@ -330,7 +330,8 @@ function startRun() {
   requestWake();
   location.hash = '#/training';
   clearInterval(runTimer);
-  runTimer = setInterval(tick, 250);
+  runTimer = setInterval(tick, 500);
+  lastTouch = Date.now();
   beginExercise();
 }
 function beginExercise() {
@@ -373,6 +374,7 @@ function finishRun() {
   save();
   clearInterval(runTimer);
   releaseWake();
+  hideDim();
   if (R.opts.speak) speak('Training beendet. Super gemacht!');
   render();
 }
@@ -380,9 +382,56 @@ function stopRun() {
   clearInterval(runTimer);
   if ('speechSynthesis' in window) speechSynthesis.cancel();
   releaseWake();
+  hideDim();
   R = null;
 }
+
+/* ---------- Akkuspar-Ansicht ----------
+   Nach 20 s ohne Berührung wird der Bildschirm schwarz (spart bei OLED-Displays viel Strom).
+   Nur Restzeit und Übung bleiben klein und dunkelgrau sichtbar. Ein Tipp holt die Ansicht zurück. */
+const DIM_AFTER = 20000;
+let lastTouch = 0, dimEl = null, dimMoved = 0;
+function showDim() {
+  if (dimEl) return;
+  dimEl = document.createElement('div');
+  dimEl.id = 'dim';
+  dimEl.innerHTML = `<div class="dim-box"><div id="dim-time"></div><div id="dim-name"></div><div class="dim-hint">Tippen zum Aufwecken</div></div>`;
+  // Der aufweckende Tipp löst bewusst keinen Knopf darunter aus
+  dimEl.addEventListener('click', ev => { ev.stopPropagation(); ev.preventDefault(); hideDim(); lastTouch = Date.now(); });
+  document.body.appendChild(dimEl);
+  dimMoved = 0;
+  updateDim();
+}
+function hideDim() {
+  if (dimEl) { dimEl.remove(); dimEl = null; }
+}
+function updateDim() {
+  if (!dimEl || !R) return;
+  const it = cur(), now = Date.now();
+  let time, name = it.name;
+  if (R.phase === 'speak') time = 'Ansage';
+  else if (R.phase === 'reps') time = '⏱ ' + fmtClock(now - R.startedAt);
+  else time = fmtClock(R.paused ? R.left : R.endAt - now);
+  if (R.phase === 'pause') name = `Pause · gleich: ${it.name}`;
+  if (R.paused) name += ' (angehalten)';
+  dimEl.querySelector('#dim-time').textContent = time;
+  dimEl.querySelector('#dim-name').textContent = name;
+  // Anzeige alle 30 s leicht versetzen, damit sich nichts ins Display einbrennt
+  if (now - dimMoved > 30000) {
+    dimMoved = now;
+    const x = Math.round((Math.random() - 0.5) * 40), y = Math.round((Math.random() - 0.5) * 50);
+    dimEl.querySelector('.dim-box').style.transform = `translate(${x}vw, ${y}vh)`;
+  }
+}
+function dimCheck() {
+  if (!R || R.phase === 'done' || !S.settings.dim) return;
+  if (!dimEl && Date.now() - lastTouch > DIM_AFTER) showDim();
+  updateDim();
+}
+['pointerdown', 'touchstart', 'keydown'].forEach(t => document.addEventListener(t, () => { lastTouch = Date.now(); }, { passive: true }));
+
 function tick() {
+  dimCheck();
   if (R && R.phase === 'reps') return updateRun(0);
   if (!R || R.paused || R.phase === 'speak' || R.phase === 'done') return;
   const left = R.endAt - Date.now();
@@ -482,23 +531,40 @@ function unlockAudio() {
     o.start(); o.stop(actx.currentTime + 0.02);
   } catch (e) { actx = null; }
 }
+// Ausgang mit Kompressor: macht die Töne lauter, ohne dass sie übersteuern
+let toneOut = null;
+function toneDest() {
+  if (!toneOut || toneOut.context !== actx) {
+    const comp = actx.createDynamicsCompressor();
+    comp.threshold.value = -12; comp.ratio.value = 8;
+    const master = actx.createGain(); master.gain.value = 1.6;
+    master.connect(comp); comp.connect(actx.destination);
+    toneOut = master;
+  }
+  return toneOut;
+}
+// Ton mit gehaltener Lautstärke; zwei Wellenformen gemischt, damit er sich draußen gut durchsetzt
 function tone(freq, start, dur) {
-  const o = actx.createOscillator(), g = actx.createGain();
-  const t = actx.currentTime + start;
-  o.type = 'sine'; o.frequency.value = freq;
+  const t = actx.currentTime + start, g = actx.createGain();
   g.gain.setValueAtTime(0.0001, t);
-  g.gain.exponentialRampToValueAtTime(0.7, t + 0.02);
+  g.gain.exponentialRampToValueAtTime(1, t + 0.02);
+  g.gain.setValueAtTime(1, t + Math.max(0.03, dur - 0.08));
   g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  o.connect(g); g.connect(actx.destination);
-  o.start(t); o.stop(t + dur + 0.05);
+  g.connect(toneDest());
+  [['triangle', 0.8], ['square', 0.18]].forEach(([type, vol]) => {
+    const o = actx.createOscillator(), v = actx.createGain();
+    o.type = type; o.frequency.value = freq; v.gain.value = vol;
+    o.connect(v); v.connect(g);
+    o.start(t); o.stop(t + dur + 0.05);
+  });
 }
 function beep(kind) {
   if (!actx || actx.state === 'closed') unlockAudio();
   if (!actx) return;
   const play = () => {
-    if (kind === 'start') tone(880, 0, 0.25);
-    else if (kind === 'switch') { tone(660, 0, 0.18); tone(660, 0.28, 0.18); }
-    else { tone(988, 0, 0.3); tone(988, 0.4, 0.3); tone(1319, 0.8, 0.7); }
+    if (kind === 'start') { tone(660, 0, 0.4); tone(880, 0.45, 0.7); }                    // aufsteigend, ca. 1,2 s
+    else if (kind === 'switch') { tone(660, 0, 0.25); tone(660, 0.35, 0.25); }
+    else { tone(988, 0, 0.4); tone(988, 0.55, 0.4); tone(988, 1.1, 0.4); tone(1319, 1.65, 1.1); } // ca. 2,8 s
   };
   // Erst spielen, wenn die Tonausgabe wirklich wieder läuft, sonst gehen die Töne verloren
   if (actx.state !== 'running') actx.resume().then(play).catch(() => {});
@@ -605,6 +671,9 @@ function viewGeneral() {
     ${toggle('Hinweiston bei Start und Ende', 'set.beep', st.beep)}
     ${toggle('Handwechsel ansagen', 'set.announceSwitch', st.announceSwitch)}
     <p class="note">Du kannst das vor jedem Training noch einmal umstellen.</p>
+  </div>
+  <div class="card"><h3>Akku sparen</h3>
+    ${toggle('Bildschirm im Training abdunkeln', 'set.dim', st.dim, 'Nach 20 Sekunden ohne Berührung wird der Bildschirm schwarz, nur Restzeit und Übung bleiben klein sichtbar. Ansagen und Töne laufen weiter. Ein Tipp holt die normale Ansicht zurück.')}
   </div>
   <div class="card"><h3>Stimme</h3>
     <label class="field"><span>Stimme</span><select data-bind="set.voice" data-test-voice>${voiceOpts}</select></label>
@@ -997,7 +1066,7 @@ const actions = {
   'run-close'() { R = null; prep = null; go('#/'); },
   'test-speak'() { speak('Führen in der Basisübung. Zehn Minuten. Nach der Hälfte Handwechsel.'); },
   'reload-voices'() { loadVoices(); render(); toast(`${voices.length} deutsche Stimmen gefunden`); },
-  'test-beep'() { unlockAudio(); beep('end'); },
+  'test-beep'() { unlockAudio(); beep('start'); setTimeout(() => beep('end'), 1800); },
   'ex-new'() {
     const id = newId('x');
     S.exercises[id] = { id, name: 'Neue Übung', phase: 'work', min: 10, hw: 0, text: '' };

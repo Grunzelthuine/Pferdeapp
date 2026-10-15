@@ -1,7 +1,7 @@
 // Service Worker: sorgt dafür, dass die App auch ohne Internet startet.
 // Strategie "erst Netz, dann Zwischenspeicher": online gibt es immer die
 // neueste Version, offline die zuletzt geladene.
-const CACHE = 'antrainieren-v2';
+const CACHE = 'antrainieren-v3';
 const FILES = ['./', 'index.html', 'app.css', 'app.js', 'daten.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png'];
 
 self.addEventListener('install', e => {

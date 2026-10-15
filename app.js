@@ -448,24 +448,61 @@ function beep(kind) {
 }
 
 let voices = [];
+// Bewertet Stimmen: natürliche/neuronale Stimmen klingen deutlich besser als ältere Systemstimmen
+function voiceScore(v) {
+  let s = 0;
+  if (/natural|neural|online/i.test(v.name)) s += 50;
+  if (/premium|enhanced|erweitert|siri/i.test(v.name)) s += 40;
+  if (/google/i.test(v.name)) s += 30;
+  if (/^de[-_]DE/i.test(v.lang)) s += 5;
+  if (v.default) s += 2;
+  return s;
+}
 function loadVoices() {
   if (!('speechSynthesis' in window)) return;
-  voices = speechSynthesis.getVoices().filter(v => /^de/i.test(v.lang));
+  voices = speechSynthesis.getVoices().filter(v => /^de/i.test(v.lang)).sort((a, b) => voiceScore(b) - voiceScore(a));
+}
+const currentVoice = () => voices.find(v => v.voiceURI === S.settings.voice) || voices[0];
+
+// Macht Texte sprechfreundlich: Klammern, Abkürzungen und Zeichen stören den Sprachfluss
+function speechText(t) {
+  return String(t)
+    .replace(/(\d)\s*×/g, '$1 mal')
+    .replace(/×/g, ' mal ')
+    .replace(/\bSek\./g, 'Sekunden')
+    .replace(/\bMin\./g, 'Minuten')
+    .replace(/\bkm\/h\b/g, 'Kilometer pro Stunde')
+    .replace(/\bz\. ?B\./g, 'zum Beispiel')
+    .replace(/\bca\./g, 'circa')
+    .replace(/\s*\(\s*/g, ', ').replace(/\s*\)\s*/g, ', ')
+    .replace(/\s+[–-]\s+/g, ', ')
+    .replace(/:/g, '.')
+    .replace(/#/g, '')
+    .replace(/\s*,\s*([,.!?])/g, '$1')
+    .replace(/,\s*,/g, ',')
+    .replace(/\s{2,}/g, ' ')
+    .trim();
 }
 function speak(text, onend) {
   if (!('speechSynthesis' in window)) { if (onend) onend(); return; }
   speechSynthesis.cancel();
-  const u = new SpeechSynthesisUtterance(text);
-  u.lang = 'de-DE';
-  u.rate = Number(S.settings.rate) || 1;
-  const v = voices.find(v => v.voiceURI === S.settings.voice) || voices[0];
-  if (v) u.voice = v;
+  text = speechText(text);
+  const v = currentVoice();
+  const rate = Number(S.settings.rate) || 1;
+  // Online-Stimmen (z. B. Google) brechen lange Texte gern ab, daher satzweise sprechen
+  const parts = v && !v.localService ? (text.match(/[^.!?]+[.!?]*/g) || [text]) : [text];
   let fired = false;
   const fin = () => { if (fired) return; fired = true; clearTimeout(guard); if (onend) onend(); };
   // Sicherheitsnetz: manche Handys melden das Ende der Ansage nicht zuverlässig
-  const guard = setTimeout(fin, text.length * 95 / u.rate + 4000);
-  u.onend = fin; u.onerror = fin;
-  speechSynthesis.speak(u);
+  const guard = setTimeout(fin, text.length * 95 / rate + 4000);
+  parts.forEach((p, k) => {
+    const u = new SpeechSynthesisUtterance(p.trim());
+    u.lang = v ? v.lang : 'de-DE';
+    u.rate = rate;
+    if (v) u.voice = v;
+    if (k === parts.length - 1) { u.onend = fin; u.onerror = fin; }
+    speechSynthesis.speak(u);
+  });
 }
 
 let wakeLock = null;
@@ -493,9 +530,9 @@ function viewSettings() {
 function viewGeneral() {
   setHeader('Allgemein', '#/einstellungen');
   const st = S.settings;
-  const voiceOpts = voices.length
-    ? voices.map(v => `<option value="${esc(v.voiceURI)}" ${v.voiceURI === st.voice ? 'selected' : ''}>${esc(v.name)} (${esc(v.lang)})</option>`).join('')
-    : '<option value="">Standardstimme</option>';
+  const best = voices[0];
+  const voiceOpts = `<option value="">Automatisch${best ? ` (${esc(best.name)})` : ''}</option>` +
+    voices.map(v => `<option value="${esc(v.voiceURI)}" ${v.voiceURI === st.voice ? 'selected' : ''}>${voiceScore(v) >= 30 ? '★ ' : ''}${esc(v.name)}</option>`).join('');
   return `<div class="card">
     <label class="field"><span>Pause zwischen zwei Übungen (Sekunden)</span>
       <input type="number" inputmode="numeric" min="0" step="5" value="${st.pauseSec}" data-bind="set.pauseSec" data-type="num"></label>
@@ -508,8 +545,13 @@ function viewGeneral() {
     <p class="note">Du kannst das vor jedem Training noch einmal umstellen.</p>
   </div>
   <div class="card"><h3>Stimme</h3>
-    <label class="field"><span>Stimme</span><select data-bind="set.voice">${voiceOpts}</select></label>
-    <label class="field"><span>Sprechtempo</span><select data-bind="set.rate" data-type="num">
+    <label class="field"><span>Stimme</span><select data-bind="set.voice" data-test-voice>${voiceOpts}</select></label>
+    <p class="note">Mit ★ markierte Stimmen klingen meist natürlicher. Welche Stimmen es gibt, hängt vom Gerät ab. Am PC sind sie oft roboterhaft, auf dem Handy meist deutlich besser.</p>
+    <details class="small" style="margin-bottom:12px"><summary style="cursor:pointer;font-weight:600">Bessere Stimme installieren</summary>
+      <p><b>iPhone:</b> Einstellungen › Bedienungshilfen › Gesprochene Inhalte › Stimmen › Deutsch. Dort eine Stimme mit „Premium“ oder „Erweitert“ laden, z. B. Anna. Danach die App neu öffnen und die Stimme hier auswählen.</p>
+      <p><b>Android:</b> Einstellungen › „Text-in-Sprache“ (meist unter Bedienungshilfen oder System › Sprache) › Bevorzugte Engine „Google-Sprachausgabe“ › Zahnrad › Sprachdaten installieren › Deutsch. Dort lässt sich auch die Stimme wählen.</p>
+    </details>
+    <label class="field"><span>Sprechtempo</span><select data-bind="set.rate" data-type="num" data-test-voice>
       ${[0.8, 0.9, 1, 1.1, 1.2].map(r => `<option value="${r}" ${Number(st.rate) === r ? 'selected' : ''}>${r === 1 ? 'normal' : num(r) + '×'}</option>`).join('')}
     </select></label>
     <div class="row"><button class="btn grow" data-act="test-speak">🔊 Vorlesen testen</button>
@@ -716,6 +758,7 @@ document.addEventListener('change', ev => {
     obj[key] = v;
     if (el.dataset.bind === 'prog.startDate' && !v) obj[key] = null;
     if (!el.dataset.bind.startsWith('prep.')) save();
+    if ('testVoice' in el.dataset) speak('So klinge ich. Führen in der Basisübung, zehn Minuten.');
     if ('rr' in el.dataset) render();
     return;
   }

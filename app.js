@@ -334,17 +334,29 @@ function startRun() {
   lastTouch = Date.now();
   beginExercise();
 }
+const introText = it => it.reps ? `${it.name}. ${it.text}` : `${it.name}. ${speakMin(it.min)}. ${it.text}`;
+// Erste Übung (bzw. ohne Pause): erst Beschreibung vorlesen, dann starten
 function beginExercise() {
   const it = cur();
-  R.phase = 'speak'; R.sw = 0; R.paused = false;
+  R.phase = 'speak'; R.sw = 0; R.paused = false; R.waitIntro = false;
   render();
-  const next = it.reps ? startReps : startWork;
   if (R.opts.speak) {
     const token = ++R.token;
-    speak(it.reps ? `${it.name}. ${it.text}` : `${it.name}. ${speakMin(it.min)}. ${it.text}`, () => {
-      if (R && R.token === token && R.phase === 'speak') next();
+    speak(introText(it), () => {
+      if (R && R.token === token && R.phase === 'speak') startCurrent();
     });
-  } else next();
+  } else startCurrent();
+}
+function startCurrent() {
+  R.sw = 0; R.paused = false; R.waitIntro = false;
+  if (cur().reps) startReps(); else startWork();
+}
+// Ende der Pause: Beschreibung wurde schon in der Pause vorgelesen, also direkt starten.
+// Läuft die Ansage noch, wird ihr Ende abgewartet.
+function pauseEnded() {
+  if (!R.opts.speak || R.introDone) return startCurrent();
+  R.phase = 'speak'; R.waitIntro = true;
+  render();
 }
 // Übung nach Anzahl: kein Countdown, nur eine mitlaufende Uhr bis „Übung fertig“
 function startReps() {
@@ -364,8 +376,16 @@ function endExercise(skipped) {
   const ps = Number(S.settings.pauseSec) || 0;
   if (ps > 0) {
     R.phase = 'pause'; R.dur = ps * 1000; R.endAt = Date.now() + R.dur; R.paused = false;
+    R.introDone = false;
     render();
-    if (R.opts.speak) { R.token++; speak(`${skipped ? '' : 'Übung beendet. '}Pause. Als Nächstes: ${cur().name}.`); }
+    if (R.opts.speak) {
+      const token = ++R.token;
+      speak(`${skipped ? '' : 'Übung beendet. '}Pause. Als Nächstes: ${introText(cur())}`, () => {
+        if (!R || R.token !== token) return;
+        R.introDone = true;
+        if (R.phase === 'speak' && R.waitIntro) startCurrent();
+      });
+    }
   } else beginExercise();
 }
 function finishRun() {
@@ -444,7 +464,7 @@ function tick() {
       if (due > R.sw) { R.sw = due; announceSwitch(); }
     }
     if (left <= 0) return endExercise(false);
-  } else if (R.phase === 'pause' && left <= 0) return beginExercise();
+  } else if (R.phase === 'pause' && left <= 0) return pauseEnded();
   updateRun(left);
 }
 function announceSwitch() {
@@ -1038,7 +1058,7 @@ const actions = {
     else toast('Du hast bereits die neueste Version');
   },
   'start-run': startRun,
-  'run-now'() { if (R.phase === 'speak') { R.token++; if ('speechSynthesis' in window) speechSynthesis.cancel(); startWork(); } },
+  'run-now'() { if (R.phase === 'speak') { R.token++; if ('speechSynthesis' in window) speechSynthesis.cancel(); startCurrent(); } },
   'run-pause'() {
     if (R.paused) {
       R.endAt = Date.now() + R.left; R.paused = false; requestWake();
@@ -1058,7 +1078,10 @@ const actions = {
     if (R.phase === 'speak') { R.token++; startReps(); }
     speak(`${it.name}. ${it.text}`);
   },
-  'run-skip'() { if (R.phase === 'pause') beginExercise(); else { R.token++; endExercise(true); } },
+  'run-skip'() {
+    if (R.phase === 'pause') { R.token++; if ('speechSynthesis' in window) speechSynthesis.cancel(); startCurrent(); }
+    else { R.token++; endExercise(true); }
+  },
   'run-abort'() {
     if (!confirm('Training abbrechen? Der Tag wird nicht als erledigt markiert.')) return;
     const i = R.i; stopRun(); go(`#/tag/${i}`);

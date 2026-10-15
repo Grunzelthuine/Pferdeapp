@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="de">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Antrainieren</title>
+  <meta name="description" content="Trainingsplan-Begleiter für das Antrainieren von Pferden">
+  <meta name="theme-color" content="#2f6b4f">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Antrainieren">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icon-192.png" type="image/png">
+  <link rel="apple-touch-icon" href="icon-180.png">
+  <link rel="stylesheet" href="app.css">
+</head>
+<body>
+  <header class="topbar">
+    <a href="#/" class="back" id="back" hidden aria-label="Zurück">‹</a>
+    <h1 id="title">Antrainieren</h1>
+    <a href="#/einstellungen" class="gear" id="gear" aria-label="Einstellungen">⚙</a>
+  </header>
+  <main id="app"></main>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="daten.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

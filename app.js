@@ -20,13 +20,15 @@ function freshState() {
     exercises,
     weeks: clone(SEED_WEEKS),
     program: { startDate: null, weekIds: SEED_WEEKS.map(w => w.id), log: {}, shifts: [] },
-    settings: { pauseSec: 60, speak: true, beep: true, announceSwitch: true, rate: 1, voice: '' }
+    settings: { pauseSec: 60, speak: true, beep: true, announceSwitch: true, rate: 1, voice: '',
+                lastBackup: '', firstUse: '', backupSnooze: '' }
   };
 }
 function load() {
   try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { S = null; }
   if (!S || !S.exercises || !S.weeks || !S.program) S = freshState();
   S.settings = Object.assign(freshState().settings, S.settings);
+  if (!S.settings.firstUse) { S.settings.firstUse = todayStr(); save(); }
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); }
@@ -168,6 +170,7 @@ function viewHome() {
       <p class="muted">Alle Trainingstage sind durch. Für das weiterführende Training kannst du unter Einstellungen neue Wochen anlegen und den Plan neu starten.</p>
       <a class="btn" href="#/einstellungen/plan">Zum Trainingsplan</a></div>`;
   }
+  if (backupDue()) h += backupCard();
   h += overview(days, today);
   return h;
 }
@@ -688,12 +691,55 @@ function viewPlan() {
   </div>`;
 }
 
+/* ---------- Sicherung ---------- */
+const BACKUP_DAYS = 14;
+function agoText(iso) {
+  const n = diffDays(iso, todayStr());
+  return n <= 0 ? 'heute' : n === 1 ? 'gestern' : `vor ${n} Tagen`;
+}
+function backupDue() {
+  const st = S.settings, ref = st.lastBackup || st.firstUse;
+  if (!S.program.startDate || !ref) return false;
+  if (st.backupSnooze && diffDays(st.backupSnooze, todayStr()) < 3) return false;
+  return diffDays(ref, todayStr()) >= BACKUP_DAYS;
+}
+function backupCard() {
+  const lb = S.settings.lastBackup;
+  return `<div class="card"><p class="eyebrow">💾 Sicherung</p>
+    <p>${lb ? `Deine letzte Sicherung war ${agoText(lb)}.` : 'Du hast noch keine Sicherung erstellt.'} Deine Daten liegen nur auf diesem Handy.</p>
+    <div class="row"><button class="btn primary grow" data-act="backup-now">Jetzt sichern</button>
+    <button class="btn grow" data-act="backup-later">Später</button></div></div>`;
+}
+const canShareFiles = () => !!(navigator.share && navigator.canShare);
+// Erstellt die Sicherungsdatei; Android erlaubt beim Teilen keine .json-Dateien, dann als .txt
+function backupFile(forShare) {
+  const name = `antrainieren-sicherung-${todayStr()}`;
+  const json = JSON.stringify(S, null, 2);
+  let file = new File([json], `${name}.json`, { type: 'application/json' });
+  if (forShare && !navigator.canShare({ files: [file] })) file = new File([json], `${name}.txt`, { type: 'text/plain' });
+  return file;
+}
+
 function viewData() {
   setHeader('Daten sichern', '#/einstellungen');
+  const lb = S.settings.lastBackup;
   return `<div class="card"><h3>Sicherung</h3>
-    <p class="note">Deine Daten liegen nur auf diesem Gerät. Erstelle ab und zu eine Sicherungsdatei, zum Beispiel bevor du das Handy wechselst oder den Browser-Speicher löschst.</p>
-    <div class="row"><button class="btn primary grow" data-act="export">⬇ Sicherung speichern</button>
-    <label class="btn grow">⬆ Sicherung laden<input type="file" accept=".json,application/json" data-change="import" hidden></label></div>
+    <p class="note">Deine Daten liegen nur auf diesem Gerät. Die Sicherung enthält alles: Übungen mit Beschreibungen, Wochen, Trainingsplan, Fortschritt und Einstellungen.</p>
+    <p><b>${lb ? `Letzte Sicherung: ${fmtLong(lb)} (${agoText(lb)})` : 'Noch keine Sicherung erstellt.'}</b></p>
+    <div class="stack">
+      ${canShareFiles() ? '<button class="btn primary big" data-act="share">📤 Sicherung teilen</button>' : ''}
+      <div class="row"><button class="btn grow ${canShareFiles() ? '' : 'primary'}" data-act="export">⬇ Als Datei speichern</button>
+      <label class="btn grow">⬆ Sicherung laden<input type="file" accept=".json,.txt,application/json,text/plain" data-change="import" hidden></label></div>
+    </div>
+    ${canShareFiles() ? '<p class="note">„Teilen“ öffnet das Teilen-Menü des Handys. So schickst du die Datei direkt per WhatsApp, Mail oder AirDrop, z. B. an dich selbst.</p>' : ''}
+  </div>
+  <div class="card"><h3>Handy wechseln</h3>
+    <ol class="small" style="padding-left:20px;margin:0">
+      <li>Auf dem alten Handy: Sicherung teilen oder speichern.</li>
+      <li>Die Datei aufs neue Handy schicken.</li>
+      <li>Auf dem neuen Handy die App installieren, dann hier „Sicherung laden“ und die Datei wählen.</li>
+    </ol>
+    <p class="note">Der Plan geht danach genau dort weiter, wo du aufgehört hast. Die Stimme musst du eventuell neu wählen.</p>
   </div>
   <div class="card"><h3>Als App installieren</h3>
     <p class="small"><b>iPhone (Safari):</b> Teilen-Symbol › „Zum Home-Bildschirm“.<br>
@@ -789,6 +835,7 @@ document.addEventListener('change', ev => {
         if (!data.exercises || !data.weeks || !data.program) throw new Error();
         if (!confirm('Sicherung laden? Alle aktuellen Daten werden ersetzt.')) return;
         S = data; S.settings = Object.assign(freshState().settings, S.settings);
+        if (!S.settings.firstUse) S.settings.firstUse = todayStr();
         prep = null; save(); toast('Sicherung geladen'); go('#/');
       } catch (e) { alert('Die Datei ist keine gültige Antrainieren-Sicherung.'); }
     };
@@ -916,13 +963,29 @@ const actions = {
     save(); prep = null; toast('Plan neu gestartet'); go('#/');
   },
   export() {
-    const blob = new Blob([JSON.stringify(S, null, 2)], { type: 'application/json' });
+    S.settings.lastBackup = todayStr();
+    save();
+    const file = backupFile(false);
     const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `antrainieren-sicherung-${todayStr()}.json`;
+    a.href = URL.createObjectURL(file);
+    a.download = file.name;
     document.body.appendChild(a); a.click(); a.remove();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast('Sicherung gespeichert');
+    render();
   },
+  share() {
+    if (!canShareFiles()) return actions.export();
+    const prev = S.settings.lastBackup;
+    S.settings.lastBackup = todayStr();
+    const file = backupFile(true);
+    if (!navigator.canShare({ files: [file] })) { S.settings.lastBackup = prev; return actions.export(); }
+    navigator.share({ files: [file], title: 'Antrainieren-Sicherung' })
+      .then(() => { save(); toast('Sicherung geteilt'); render(); })
+      .catch(e => { S.settings.lastBackup = prev; if (e.name !== 'AbortError') toast('Teilen hat nicht geklappt'); });
+  },
+  'backup-now'() { canShareFiles() ? actions.share() : actions.export(); },
+  'backup-later'() { S.settings.backupSnooze = todayStr(); save(); render(); },
   'reset-all'() {
     if (!confirm('Wirklich ALLES zurücksetzen? Eigene Übungen, Wochen und Häkchen gehen verloren.')) return;
     S = freshState(); prep = null; save(); go('#/'); render();

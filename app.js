@@ -21,7 +21,7 @@ function freshState() {
     weeks: clone(SEED_WEEKS),
     program: { startDate: null, weekIds: SEED_WEEKS.map(w => w.id), log: {}, shifts: [] },
     settings: { pauseSec: 60, speak: true, beep: true, announceSwitch: true, rate: 1, voice: '',
-                lastBackup: '', firstUse: '', backupSnooze: '' }
+                lockscreen: false, lastBackup: '', firstUse: '', backupSnooze: '' }
   };
 }
 function load() {
@@ -224,7 +224,8 @@ function viewDay(i) {
   if (!prep || prep.i !== i) {
     prep = {
       i, items: validItems(d.day).map(it => ({ ...it })),
-      speak: S.settings.speak, beep: S.settings.beep, announceSwitch: S.settings.announceSwitch
+      speak: S.settings.speak, beep: S.settings.beep, announceSwitch: S.settings.announceSwitch,
+      lockscreen: S.settings.lockscreen
     };
   }
   setHeader(dayTitle(d), '#/');
@@ -260,6 +261,7 @@ function viewDay(i) {
     ${toggle('Übungsbeschreibung vorlesen', 'prep.speak', prep.speak)}
     ${toggle('Hinweiston bei Start und Ende', 'prep.beep', prep.beep)}
     ${toggle('Handwechsel ansagen', 'prep.announceSwitch', prep.announceSwitch)}
+    ${toggle('Anzeige auf dem Sperrbildschirm (Test)', 'prep.lockscreen', prep.lockscreen, 'Zeigt Übung und Restzeit wie bei Musik an. Ansagen laufen dann meist auch bei gesperrtem Handy weiter.')}
     <div class="hint">Tipp: Lautstärke aufdrehen. Beim iPhone den Stummschalter ausschalten, sonst bleibt der Ton aus.</div>
     <button class="btn primary big" data-act="start-run">▶ Training starten</button>
     </div>`;
@@ -293,8 +295,9 @@ function startRun() {
   });
   if (!items.length) return toast('Keine Übungen mit Zeit vorhanden');
   R = { i: prep.i, title: dayTitle(d), items, idx: 0, phase: 'speak', endAt: 0, dur: 0, left: 0,
-        paused: false, sw: 0, token: 0, opts: { speak: prep.speak, beep: prep.beep, sw: prep.announceSwitch } };
+        paused: false, sw: 0, token: 0, opts: { speak: prep.speak, beep: prep.beep, sw: prep.announceSwitch, lock: prep.lockscreen } };
   unlockAudio();
+  if (R.opts.lock) lockStart();
   requestWake();
   location.hash = '#/training';
   clearInterval(runTimer);
@@ -336,12 +339,14 @@ function finishRun() {
   clearInterval(runTimer);
   releaseWake();
   if (R.opts.speak) speak('Training beendet. Super gemacht!');
+  if (R.opts.lock) { lockUpdate(0); setTimeout(lockStop, 4000); }
   render();
 }
 function stopRun() {
   clearInterval(runTimer);
   if ('speechSynthesis' in window) speechSynthesis.cancel();
   releaseWake();
+  lockStop();
   R = null;
 }
 function tick() {
@@ -373,7 +378,67 @@ function remainingTotal(left) {
   for (let k = R.idx + 1; k < R.items.length; k++) ms += p + R.items[k].min * 60000;
   return ms;
 }
+/* ---------- Sperrbildschirm (Test) ----------
+   Eine stumme Audiospur läuft in Schleife. Dadurch zeigt das Handy die Medien-Anzeige
+   auf dem Sperrbildschirm, und die App wird meist nicht schlafen gelegt. */
+let lockAudio = null, lockKey = '';
+function silentWavUrl() {
+  const rate = 8000, n = rate * 10, buf = new ArrayBuffer(44 + n * 2), v = new DataView(buf);
+  const w = (o, s) => [...s].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+  w(0, 'RIFF'); v.setUint32(4, 36 + n * 2, true); w(8, 'WAVE'); w(12, 'fmt ');
+  v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true); v.setUint32(28, rate * 2, true); v.setUint16(32, 2, true); v.setUint16(34, 16, true);
+  w(36, 'data'); v.setUint32(40, n * 2, true);
+  return URL.createObjectURL(new Blob([buf], { type: 'audio/wav' }));
+}
+function lockStart() {
+  try {
+    if (!lockAudio) {
+      lockAudio = new Audio(silentWavUrl());
+      lockAudio.loop = true;
+      lockAudio.setAttribute('playsinline', '');
+    }
+    lockAudio.play().catch(() => {});
+    lockKey = '';
+    if ('mediaSession' in navigator) {
+      const ms = navigator.mediaSession;
+      const set = (a, fn) => { try { ms.setActionHandler(a, fn); } catch (e) {} };
+      set('pause', () => { if (R && !R.paused && R.phase !== 'speak' && R.phase !== 'done') actions['run-pause'](); });
+      set('play', () => { if (R && R.paused) actions['run-pause'](); else lockAudio && lockAudio.play().catch(() => {}); });
+      set('nexttrack', () => { if (R && R.phase !== 'done') actions['run-skip'](); });
+      set('previoustrack', null); set('seekbackward', null); set('seekforward', null); set('seekto', null);
+    }
+  } catch (e) { /* nicht unterstützt */ }
+}
+function lockStop() {
+  try {
+    if (lockAudio) lockAudio.pause();
+    if ('mediaSession' in navigator) { navigator.mediaSession.metadata = null; navigator.mediaSession.playbackState = 'none'; }
+  } catch (e) {}
+}
+function lockUpdate(left) {
+  if (!R || !R.opts.lock || !('mediaSession' in navigator)) return;
+  try {
+    const ms = navigator.mediaSession, it = cur(), n = R.items.length;
+    let title, artist;
+    if (R.phase === 'done') { title = 'Training beendet 🎉'; artist = R.title; }
+    else if (R.phase === 'pause') { title = `Pause ${fmtClock(left)} · gleich: ${it.name}`; artist = `Übung ${R.idx + 1} von ${n} · Antrainieren`; }
+    else if (R.phase === 'speak') { title = `Ansage: ${it.name}`; artist = `Übung ${R.idx + 1} von ${n} · Antrainieren`; }
+    else { title = `${fmtClock(left)} · ${it.name}`; artist = `Übung ${R.idx + 1} von ${n} · Antrainieren`; }
+    ms.metadata = new MediaMetadata({ title, artist, album: R.title,
+      artwork: [{ src: new URL('icon-512.png', location.href).href, sizes: '512x512', type: 'image/png' }] });
+    ms.playbackState = R.paused ? 'paused' : 'playing';
+    // Fortschrittsbalken: nur bei Phasenwechsel neu setzen, dann läuft er von selbst
+    const key = `${R.idx}|${R.phase}|${R.paused}`;
+    if (key !== lockKey && ms.setPositionState && R.phase !== 'speak' && R.dur > 0) {
+      lockKey = key;
+      ms.setPositionState({ duration: R.dur / 1000, position: Math.min(R.dur, Math.max(0, R.dur - left)) / 1000, playbackRate: 1 });
+    }
+  } catch (e) {}
+}
+
 function updateRun(left) {
+  lockUpdate(left);
   const t = $('#rt-time'); if (!t) return;
   t.textContent = fmtClock(left);
   const bar = $('#rt-bar'); if (bar) bar.style.width = `${Math.min(100, 100 * (1 - left / R.dur))}%`;
@@ -548,6 +613,7 @@ function viewGeneral() {
     ${toggle('Übungsbeschreibung vorlesen', 'set.speak', st.speak)}
     ${toggle('Hinweiston bei Start und Ende', 'set.beep', st.beep)}
     ${toggle('Handwechsel ansagen', 'set.announceSwitch', st.announceSwitch)}
+    ${toggle('Anzeige auf dem Sperrbildschirm (Test)', 'set.lockscreen', st.lockscreen, 'Übung und Restzeit erscheinen wie bei Musik auf dem Sperrbildschirm, mit Pause und Weiter.')}
     <p class="note">Du kannst das vor jedem Training noch einmal umstellen.</p>
   </div>
   <div class="card"><h3>Stimme</h3>
@@ -894,8 +960,13 @@ const actions = {
   'start-run': startRun,
   'run-now'() { if (R.phase === 'speak') { R.token++; if ('speechSynthesis' in window) speechSynthesis.cancel(); startWork(); } },
   'run-pause'() {
-    if (R.paused) { R.endAt = Date.now() + R.left; R.paused = false; requestWake(); }
-    else { R.left = R.endAt - Date.now(); R.paused = true; if ('speechSynthesis' in window) speechSynthesis.cancel(); }
+    if (R.paused) {
+      R.endAt = Date.now() + R.left; R.paused = false; requestWake();
+      if (R.opts.lock && lockAudio) lockAudio.play().catch(() => {});
+    } else {
+      R.left = R.endAt - Date.now(); R.paused = true; if ('speechSynthesis' in window) speechSynthesis.cancel();
+      if (R.opts.lock && lockAudio) lockAudio.pause();
+    }
     render();
   },
   'run-skip'() { if (R.phase === 'pause') beginExercise(); else { R.token++; endExercise(true); } },

@@ -37,19 +37,19 @@ const SEED_EXERCISES = {
     text: 'Führe dein Pferd über 4 Schrittstangen auf gerader Linie im kleinen Oval. 5 Minuten je Hand.'
   },
   schenkel_viertel: {
-    name: 'Schenkelweichen Viertellinie zur Bande', phase: 'work', min: 8, hw: 4,
+    name: 'Schenkelweichen Viertellinie zur Bande', phase: 'work', mode: 'reps', min: 0, hw: 0,
     text: 'Schenkelweichen an der Hand von der Viertellinie zur Bande, 15 mal je Hand. Das Pferd leicht gegen die Bewegungsrichtung gestellt. Wird es eilig, Haltpausen einbauen.'
   },
   schenkel_zirkel: {
-    name: 'Schenkelweichen auf dem Zirkel', phase: 'work', min: 6, hw: 3,
+    name: 'Schenkelweichen auf dem Zirkel', phase: 'work', mode: 'reps', min: 0, hw: 0,
     text: 'Schenkelweichen an der Hand als Übertreten auf dem Zirkel, zwei Zirkelrunden pro Hand, mit Haltpausen.'
   },
   faecher_2x45: {
-    name: 'Stangenfächer 2× 45 Sek. je Hand', phase: 'work', min: 5, hw: 0,
+    name: 'Stangenfächer 2× 45 Sek. je Hand', phase: 'work', mode: 'reps', min: 0, hw: 0,
     text: 'Führe auf der Volte über den Stangenfächer. Ziel: 45 Sekunden ununterbrochen in der Biegung, dann Pause auf der Geraden und Handwechsel. Je Hand zweimal.'
   },
   faecher_3x45: {
-    name: 'Stangenfächer 3× 45 Sek. je Hand', phase: 'work', min: 7, hw: 0,
+    name: 'Stangenfächer 3× 45 Sek. je Hand', phase: 'work', mode: 'reps', min: 0, hw: 0,
     text: 'Führe auf der Volte über den Stangenfächer. Ziel: 45 Sekunden ununterbrochen in der Biegung, dann Pause auf der Geraden und Handwechsel. Je Hand dreimal.'
   },
   trabstangen: {
@@ -61,11 +61,11 @@ const SEED_EXERCISES = {
     text: 'Trab unterm Sattel auf ganzer Bahn und Zirkel, auf beiden Händen. Leichter Sitz oder Leichttraben, mit wechselndem Rahmen.'
   },
   oval_trab_galopp: {
-    name: 'Großes Oval Trab und Galopp', phase: 'work', min: 6, hw: 3,
+    name: 'Großes Oval Trab und Galopp', phase: 'work', mode: 'reps', min: 0, hw: 0,
     text: 'Auf dem großen Oval im Trab und Galopp, auf beiden Händen etwa drei Runden.'
   },
   oval_galopp: {
-    name: 'Großes Oval Galopp', phase: 'work', min: 4, hw: 2,
+    name: 'Großes Oval Galopp', phase: 'work', mode: 'reps', min: 0, hw: 0,
     text: 'Galopp auf dem großen Oval, auf beiden Händen.'
   },
   cooldown: {

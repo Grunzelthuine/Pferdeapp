@@ -194,6 +194,7 @@ input[type=date]::-webkit-datetime-edit { padding: 0; }
 .run .controls { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 16px; }
 .run .controls .btn.primary { grid-column: 1 / -1; min-height: 60px; font-size: 20px; }
 .run.pause-phase .time { color: var(--cool); }
+.run .time.stopwatch { font-size: 36px; font-weight: 600; color: var(--muted); margin: 4px 0 8px; }
 .next { margin-top: 12px; font-size: 14px; color: var(--muted); }
 
 #toast {

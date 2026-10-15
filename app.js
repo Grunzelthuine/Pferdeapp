@@ -17,6 +17,7 @@ function freshState() {
   for (const [id, e] of Object.entries(SEED_EXERCISES)) exercises[id] = { id, ...e };
   return {
     version: 1,
+    dataVersion: 2,
     exercises,
     weeks: clone(SEED_WEEKS),
     program: { startDate: null, weekIds: SEED_WEEKS.map(w => w.id), log: {}, shifts: [] },
@@ -29,6 +30,21 @@ function load() {
   if (!S || !S.exercises || !S.weeks || !S.program) S = freshState();
   S.settings = Object.assign(freshState().settings, S.settings);
   if (!S.settings.firstUse) { S.settings.firstUse = todayStr(); save(); }
+  if (migrate()) save();
+}
+// Ältere Daten anpassen: Übungen mit fester Anzahl hatten früher geschätzte Zeiten
+const REPS_IDS = ['schenkel_viertel', 'schenkel_zirkel', 'faecher_2x45', 'faecher_3x45', 'oval_trab_galopp', 'oval_galopp'];
+function migrate() {
+  if ((S.dataVersion || 1) >= 2) return false;
+  REPS_IDS.forEach(id => {
+    const e = S.exercises[id];
+    if (e && !e.mode) Object.assign(e, { mode: 'reps', min: 0, hw: 0 });
+  });
+  S.weeks.forEach(w => w.days.forEach(d => d.items.forEach(it => {
+    if (REPS_IDS.includes(it.ex) && isRepsEx(S.exercises[it.ex])) { it.min = 0; it.hw = 0; }
+  })));
+  S.dataVersion = 2;
+  return true;
 }
 function save() {
   try { localStorage.setItem(KEY, JSON.stringify(S)); }
@@ -66,9 +82,16 @@ function dateOf(i) {
   return addDays(S.program.startDate, i + off);
 }
 const validItems = day => day.items.filter(it => S.exercises[it.ex]);
-const isRest = day => !validItems(day).some(it => it.min > 0);
+const isRepsEx = e => !!e && e.mode === 'reps';
+const isReps = it => isRepsEx(S.exercises[it.ex]);
+const isRest = day => !validItems(day).some(it => isReps(it) || it.min > 0);
 const statusOf = i => (S.program.log[i] && S.program.log[i].status) || null;
-const dayMinutes = items => items.reduce((a, it) => a + (S.exercises[it.ex] ? Number(it.min) || 0 : 0), 0);
+const dayMinutes = items => items.reduce((a, it) => a + (S.exercises[it.ex] && !isReps(it) ? Number(it.min) || 0 : 0), 0);
+// z. B. „ca. 46 Min. + 2 Übungen nach Anzahl“
+function durText(items) {
+  const n = items.filter(isReps).length;
+  return `ca. ${fmtMin(dayMinutes(items))}${n ? ` + ${n} ${n === 1 ? 'Übung' : 'Übungen'} nach Anzahl` : ''}`;
+}
 function firstMissed(days, today) {
   return days.find(d => !statusOf(d.i) && !isRest(d.day) && dateOf(d.i) < today);
 }
@@ -109,13 +132,14 @@ function itemsList(items, withText = true) {
   return `<ul class="items">${items.map(it => {
     const e = S.exercises[it.ex];
     if (!e) return '';
-    const hw = it.hw > 0 ? ` · Handwechsel alle ${fmtMin(it.hw)}` : '';
+    const reps = isRepsEx(e);
+    const hw = !reps && it.hw > 0 ? ` · Handwechsel alle ${fmtMin(it.hw)}` : '';
     return `<li><span class="dot ${e.phase}"></span>
       <div class="grow">${withText && e.text
         ? exDetails(e)
         : `<div class="name">${esc(e.name)}</div>`}
         <div class="muted small">${PHASES[e.phase] || ''}${hw}</div></div>
-      <span class="mins">${it.min > 0 ? fmtMin(it.min) : ''}</span></li>`;
+      <span class="mins">${reps ? 'nach Anzahl' : it.min > 0 ? fmtMin(it.min) : ''}</span></li>`;
   }).join('')}</ul>`;
 }
 const STATE_BADGE = {
@@ -186,8 +210,8 @@ function dayCard(d, eyebrow, compact = false) {
     h += `<p>🌿 Ruhetag: Koppelpause oder Spaziergang.</p>`;
     return h + '</div>';
   }
-  if (!compact) h += itemsList(items) + `<p class="muted small">Gesamt ca. ${fmtMin(dayMinutes(items))} + Pausen</p>`;
-  else h += `<p class="muted small">${items.length} Übungen · ca. ${fmtMin(dayMinutes(items))}</p>`;
+  if (!compact) h += itemsList(items) + `<p class="muted small">Gesamt ${durText(items)} + Pausen</p>`;
+  else h += `<p class="muted small">${items.length} Übungen · ${durText(items)}</p>`;
   h += `<a class="btn ${compact ? '' : 'primary big'}" href="#/tag/${d.i}">${st === 'done' ? 'Ansehen' : compact ? 'Ansehen' : 'Zum Training ›'}</a></div>`;
   return h;
 }
@@ -244,6 +268,12 @@ function viewDay(i) {
     <p class="note" style="margin-top:0">Tippe auf eine Übung, um die Beschreibung zu lesen.</p><ul class="items">`;
   prep.items.forEach((it, k) => {
     const e = S.exercises[it.ex];
+    if (isRepsEx(e)) {
+      h += `<li><span class="dot ${e.phase}"></span><div class="grow">
+        ${exDetails(e)}
+        <div class="muted small">${PHASES[e.phase] || ''} · nach Anzahl, im Training mit „Übung fertig“ abhaken</div></div></li>`;
+      return;
+    }
     h += `<li><span class="dot ${e.phase}"></span><div class="grow">
       ${exDetails(e)}
       <div class="muted small">${PHASES[e.phase] || ''}${it.hw > 0 ? ` · Handwechsel alle ${fmtMin(it.hw)}` : ''}</div>
@@ -254,7 +284,7 @@ function viewDay(i) {
         <span class="muted small">Min.</span>
       </div></div></li>`;
   });
-  h += `</ul><p class="muted small">Gesamt ca. ${fmtMin(dayMinutes(prep.items))} + ${S.settings.pauseSec} s Pause zwischen den Übungen</p>
+  h += `</ul><p class="muted small">Gesamt ${durText(prep.items)} + ${S.settings.pauseSec} s Pause zwischen den Übungen</p>
     <p class="note">Zeitänderungen hier gelten nur für dieses Training. Dauerhaft änderst du sie unter Einstellungen › Wochen.</p></div>`;
 
   h += `<div class="card"><h3>Vor dem Start</h3>
@@ -289,11 +319,12 @@ const cur = () => R.items[R.idx];
 
 function startRun() {
   const d = progDays()[prep.i];
-  const items = prep.items.filter(it => it.min > 0 && S.exercises[it.ex]).map(it => {
-    const e = S.exercises[it.ex];
-    return { name: e.name, text: e.text || '', phase: e.phase, min: Number(it.min), hw: Number(it.hw) || 0 };
+  const items = prep.items.filter(it => S.exercises[it.ex] && (isReps(it) || it.min > 0)).map(it => {
+    const e = S.exercises[it.ex], reps = isRepsEx(e);
+    return { name: e.name, text: e.text || '', phase: e.phase, reps,
+             min: reps ? 0 : Number(it.min), hw: reps ? 0 : Number(it.hw) || 0 };
   });
-  if (!items.length) return toast('Keine Übungen mit Zeit vorhanden');
+  if (!items.length) return toast('Keine Übungen vorhanden');
   R = { i: prep.i, title: dayTitle(d), items, idx: 0, phase: 'speak', endAt: 0, dur: 0, left: 0,
         paused: false, sw: 0, token: 0, opts: { speak: prep.speak, beep: prep.beep, sw: prep.announceSwitch, lock: prep.lockscreen } };
   unlockAudio();
@@ -308,12 +339,18 @@ function beginExercise() {
   const it = cur();
   R.phase = 'speak'; R.sw = 0; R.paused = false;
   render();
+  const next = it.reps ? startReps : startWork;
   if (R.opts.speak) {
     const token = ++R.token;
-    speak(`${it.name}. ${speakMin(it.min)}. ${it.text}`, () => {
-      if (R && R.token === token && R.phase === 'speak') startWork();
+    speak(it.reps ? `${it.name}. ${it.text}` : `${it.name}. ${speakMin(it.min)}. ${it.text}`, () => {
+      if (R && R.token === token && R.phase === 'speak') next();
     });
-  } else startWork();
+  } else next();
+}
+// Übung nach Anzahl: kein Countdown, nur eine mitlaufende Uhr bis „Übung fertig“
+function startReps() {
+  R.phase = 'reps'; R.dur = 0; R.startedAt = Date.now();
+  render();
 }
 function startWork() {
   const it = cur();
@@ -350,6 +387,7 @@ function stopRun() {
   R = null;
 }
 function tick() {
+  if (R && R.phase === 'reps') return updateRun(0);
   if (!R || R.paused || R.phase === 'speak' || R.phase === 'done') return;
   const left = R.endAt - Date.now();
   if (R.phase === 'work') {
@@ -403,7 +441,7 @@ function lockStart() {
     if ('mediaSession' in navigator) {
       const ms = navigator.mediaSession;
       const set = (a, fn) => { try { ms.setActionHandler(a, fn); } catch (e) {} };
-      set('pause', () => { if (R && !R.paused && R.phase !== 'speak' && R.phase !== 'done') actions['run-pause'](); });
+      set('pause', () => { if (R && !R.paused && (R.phase === 'work' || R.phase === 'pause')) actions['run-pause'](); });
       set('play', () => { if (R && R.paused) actions['run-pause'](); else lockAudio && lockAudio.play().catch(() => {}); });
       set('nexttrack', () => { if (R && R.phase !== 'done') actions['run-skip'](); });
       set('previoustrack', null); set('seekbackward', null); set('seekforward', null); set('seekto', null);
@@ -424,6 +462,7 @@ function lockUpdate(left) {
     if (R.phase === 'done') { title = 'Training beendet 🎉'; artist = R.title; }
     else if (R.phase === 'pause') { title = `Pause ${fmtClock(left)} · gleich: ${it.name}`; artist = `Übung ${R.idx + 1} von ${n} · Antrainieren`; }
     else if (R.phase === 'speak') { title = `Ansage: ${it.name}`; artist = `Übung ${R.idx + 1} von ${n} · Antrainieren`; }
+    else if (R.phase === 'reps') { title = it.name; artist = `Nach Anzahl · ⏭ = fertig · Übung ${R.idx + 1} von ${n}`; }
     else { title = `${fmtClock(left)} · ${it.name}`; artist = `Übung ${R.idx + 1} von ${n} · Antrainieren`; }
     ms.metadata = new MediaMetadata({ title, artist, album: R.title,
       artwork: [{ src: new URL('icon-512.png', location.href).href, sizes: '512x512', type: 'image/png' }] });
@@ -440,9 +479,12 @@ function lockUpdate(left) {
 function updateRun(left) {
   lockUpdate(left);
   const t = $('#rt-time'); if (!t) return;
-  t.textContent = fmtClock(left);
-  const bar = $('#rt-bar'); if (bar) bar.style.width = `${Math.min(100, 100 * (1 - left / R.dur))}%`;
-  const tot = $('#rt-total'); if (tot) tot.textContent = `Noch ca. ${Math.ceil(remainingTotal(left) / 60000)} Min. insgesamt`;
+  const repsNow = cur().reps && (R.phase === 'reps' || R.phase === 'speak');
+  t.textContent = R.phase === 'reps' ? '⏱ ' + fmtClock(Date.now() - R.startedAt) : repsNow ? '–' : fmtClock(left);
+  const bar = $('#rt-bar'); if (bar) bar.style.width = repsNow ? '0%' : `${Math.min(100, 100 * (1 - left / R.dur))}%`;
+  const nr = R.items.slice(R.phase === 'pause' ? R.idx : R.idx + 1).filter(x => x.reps).length;
+  const tot = $('#rt-total');
+  if (tot) tot.textContent = `Noch ca. ${Math.ceil(remainingTotal(left) / 60000)} Min.${nr ? ` + ${nr} nach Anzahl` : ''} insgesamt`;
 }
 function viewRun() {
   if (!R) { go('#/'); return ''; }
@@ -455,10 +497,15 @@ function viewRun() {
   const it = cur(), n = R.items.length;
   const isPause = R.phase === 'pause';
   const next = R.items[R.idx + 1];
-  const left = R.phase === 'speak' ? it.min * 60000 : (R.paused ? R.left : R.endAt - Date.now());
-  const label = R.phase === 'speak' ? 'Ansage' : isPause ? 'Pause' : (PHASES[it.phase] || '');
+  const repsNow = it.reps && (R.phase === 'speak' || R.phase === 'reps');
+  const left = repsNow ? 0 : R.phase === 'speak' ? it.min * 60000 : (R.paused ? R.left : R.endAt - Date.now());
+  const label = R.phase === 'speak' ? 'Ansage' : isPause ? 'Pause' : R.phase === 'reps' ? 'Nach Anzahl' : (PHASES[it.phase] || '');
   let controls;
-  if (R.phase === 'speak') {
+  if (repsNow) {
+    controls = `<button class="btn primary" data-act="run-done">✓ Übung fertig</button>
+      <button class="btn" data-act="run-repeat">🔊 Nochmal vorlesen</button>
+      <button class="btn danger" data-act="run-abort">✕ Abbrechen</button>`;
+  } else if (R.phase === 'speak') {
     controls = `<button class="btn primary" data-act="run-now">▶ Timer jetzt starten</button>
       <button class="btn" data-act="run-skip">⏭ Überspringen</button>
       <button class="btn danger" data-act="run-abort">✕ Abbrechen</button>`;
@@ -474,14 +521,15 @@ function viewRun() {
   return `<div class="card run ${isPause ? 'pause-phase' : ''}">
     <div class="phase">${label} · Übung ${R.idx + 1} von ${n}</div>
     <div class="exname">${isPause ? 'Gleich: ' : ''}${esc(it.name)}</div>
-    <div class="time" id="rt-time">${fmtClock(left)}</div>
-    <div class="bar"><div id="rt-bar" style="width:${R.phase === 'speak' ? 0 : Math.min(100, 100 * (1 - left / R.dur))}%"></div></div>
+    <div class="time ${repsNow ? 'stopwatch' : ''}" id="rt-time">${R.phase === 'reps' ? '⏱ ' + fmtClock(Date.now() - R.startedAt) : repsNow ? '–' : fmtClock(left)}</div>
+    ${repsNow ? `<p class="muted small" style="margin:0">Ohne Timer: Führe die Übung wie beschrieben durch und tippe dann auf „Übung fertig“.</p>`
+      : `<div class="bar"><div id="rt-bar" style="width:${R.phase === 'speak' ? 0 : Math.min(100, 100 * (1 - left / R.dur))}%"></div></div>`}
     <div class="muted small" id="rt-total"></div>
     ${R.paused ? '<p><b>Angehalten</b></p>' : ''}
     <div class="controls">${controls}</div>
     ${it.text ? `<p class="desc">${esc(it.text)}</p>` : ''}
     ${it.hw > 0 && R.opts.sw ? `<p class="muted small">Handwechsel-Ansage alle ${fmtMin(it.hw)}</p>` : ''}
-    ${next && !isPause ? `<p class="next">Danach: ${esc(next.name)} (${fmtMin(next.min)})</p>` : ''}
+    ${next && !isPause ? `<p class="next">Danach: ${esc(next.name)} (${next.reps ? 'nach Anzahl' : fmtMin(next.min)})</p>` : ''}
   </div>`;
 }
 
@@ -648,7 +696,7 @@ function viewExercises() {
     const list = sortedExercises().filter(e => e.phase === ph);
     if (!list.length) continue;
     h += `<div class="card"><h3>${PHASES[ph]}</h3><ul class="menu">${list.map(e =>
-      `<li><a href="#/uebung/${encodeURIComponent(e.id)}"><span class="dot ${e.phase}" style="margin:0"></span><span>${esc(e.name)}<span class="sub">${fmtMin(e.min)}${e.hw > 0 ? ` · Handwechsel alle ${fmtMin(e.hw)}` : ''}</span></span></a></li>`).join('')}</ul></div>`;
+      `<li><a href="#/uebung/${encodeURIComponent(e.id)}"><span class="dot ${e.phase}" style="margin:0"></span><span>${esc(e.name)}<span class="sub">${isRepsEx(e) ? 'nach Anzahl' : fmtMin(e.min) + (e.hw > 0 ? ` · Handwechsel alle ${fmtMin(e.hw)}` : '')}</span></span></a></li>`).join('')}</ul></div>`;
   }
   return h;
 }
@@ -666,16 +714,20 @@ function viewExercise(id) {
     <label class="field"><span>Bezeichnung</span><input type="text" value="${esc(e.name)}" data-bind="ex.${id}.name"></label>
     <label class="field"><span>Bereich</span><select data-bind="ex.${id}.phase">
       ${Object.entries(PHASES).map(([k, v]) => `<option value="${k}" ${e.phase === k ? 'selected' : ''}>${v}</option>`).join('')}</select></label>
+    <label class="field"><span>Art der Übung</span><select data-change="ex-mode" data-id="${esc(id)}">
+      <option value="time" ${isRepsEx(e) ? '' : 'selected'}>Nach Zeit (mit Timer)</option>
+      <option value="reps" ${isRepsEx(e) ? 'selected' : ''}>Nach Anzahl (ohne Timer)</option></select></label>
+    ${isRepsEx(e) ? `<p class="note">Kein Timer: Die App liest die Beschreibung vor, und du tippst auf „Übung fertig“, wenn du durch bist. Schreib die Anzahl am besten in die Beschreibung, z. B. „15 mal je Hand“.</p>` : `
     <div class="row">
       <label class="field grow"><span>Standardzeit (Min.)</span><input type="number" inputmode="decimal" min="0" step="0.5" value="${e.min}" data-bind="ex.${id}.min" data-type="num"></label>
       <label class="field grow"><span>Handwechsel alle (Min.)</span><input type="number" inputmode="decimal" min="0" step="0.5" value="${e.hw}" data-bind="ex.${id}.hw" data-type="num"></label>
     </div>
-    <p class="note">Handwechsel 0 = keine Ansage. Die Standardzeit wird übernommen, wenn du die Übung neu in einen Tag einfügst.</p>
+    <p class="note">Handwechsel 0 = keine Ansage. Die Standardzeit wird übernommen, wenn du die Übung neu in einen Tag einfügst.</p>`}
     <label class="field"><span>Beschreibung (wird vorgelesen)</span><textarea data-bind="ex.${id}.text">${esc(e.text)}</textarea></label>
     <button class="btn" data-act="ex-test" data-id="${esc(id)}">🔊 Vorlesen testen</button>
   </div>
   <div class="card"><p class="muted small">Wird in ${used} Trainingstag${used === 1 ? '' : 'en'} verwendet.</p>
-    ${used ? `<button class="btn" data-act="ex-apply" data-id="${esc(id)}">Standardzeit in allen Tagen übernehmen</button>` : ''}
+    ${used && !isRepsEx(e) ? `<button class="btn" data-act="ex-apply" data-id="${esc(id)}">Standardzeit in allen Tagen übernehmen</button>` : ''}
     <hr><button class="btn danger" data-act="ex-del" data-id="${esc(id)}">Übung löschen</button></div>`;
 }
 
@@ -709,15 +761,15 @@ function viewWeek(id) {
     <button class="btn danger grow" data-act="week-del" data-id="${esc(id)}">Woche löschen</button></div></div>`;
   w.days.forEach((d, di) => {
     h += `<div class="card"><div class="row"><h3 class="grow" style="margin:0">Tag ${di + 1}</h3>
-      <span class="muted small">${isRest(d) ? '🌿 Ruhetag' : 'ca. ' + fmtMin(dayMinutes(d.items))}</span></div>
+      <span class="muted small">${isRest(d) ? '🌿 Ruhetag' : durText(validItems(d))}</span></div>
       <label class="field" style="margin-top:8px"><span>Notiz</span><input type="text" value="${esc(d.note)}" placeholder="z. B. Ziel des Tages" data-bind="week.${id}.days.${di}.note"></label>`;
     d.items.forEach((it, k) => {
       const base = `data-w="${esc(id)}" data-d="${di}" data-k="${k}"`;
       h += `<div class="ex-row">
           <select data-change="item-ex" ${base}>${exerciseOptions(it.ex, S.exercises[it.ex] ? '' : '– Übung fehlt –')}</select>
-          <div class="nums">
+          <div class="nums">${isReps(it) ? '<span>nach Anzahl (ohne Timer)</span>' : `
             <label>Min. <input type="number" inputmode="decimal" min="0" step="0.5" value="${it.min}" data-bind="week.${id}.days.${di}.items.${k}.min" data-type="num" data-rr></label>
-            <label>Wechsel alle <input type="number" inputmode="decimal" min="0" step="0.5" value="${it.hw || 0}" data-bind="week.${id}.days.${di}.items.${k}.hw" data-type="num"></label>
+            <label>Wechsel alle <input type="number" inputmode="decimal" min="0" step="0.5" value="${it.hw || 0}" data-bind="week.${id}.days.${di}.items.${k}.hw" data-type="num"></label>`}
             <span class="acts">
               <button class="icon-btn" data-act="item-move" data-dir="-1" ${base} aria-label="Nach oben">↑</button>
               <button class="icon-btn" data-act="item-move" data-dir="1" ${base} aria-label="Nach unten">↓</button>
@@ -897,6 +949,16 @@ document.addEventListener('change', ev => {
     const e = S.exercises[el.value];
     Object.assign(weekById(d.w).days[+d.d].items[+d.k], { ex: e.id, min: e.min, hw: e.hw });
     save(); render();
+  } else if (ch === 'ex-mode') {
+    const e = S.exercises[d.id];
+    if (el.value === 'reps') e.mode = 'reps';
+    else {
+      // Zurück auf Zeit: Tage ohne Minuten bekommen die Standardzeit, sonst gälten sie als leer
+      delete e.mode;
+      if (!(e.min > 0)) e.min = 10;
+      S.weeks.forEach(w => w.days.forEach(day => day.items.forEach(it => { if (it.ex === e.id && !(it.min > 0)) it.min = e.min; })));
+    }
+    prep = null; save(); render();
   } else if (ch === 'prog-add' && el.value) {
     S.program.weekIds.push(el.value);
     save(); render(); toast('Woche angehängt');
@@ -908,6 +970,7 @@ document.addEventListener('change', ev => {
         if (!data.exercises || !data.weeks || !data.program) throw new Error();
         if (!confirm('Sicherung laden? Alle aktuellen Daten werden ersetzt.')) return;
         S = data; S.settings = Object.assign(freshState().settings, S.settings);
+        migrate();
         if (!S.settings.firstUse) S.settings.firstUse = todayStr();
         prep = null; save(); toast('Sicherung geladen'); go('#/');
       } catch (e) { alert('Die Datei ist keine gültige Antrainieren-Sicherung.'); }
@@ -976,6 +1039,17 @@ const actions = {
     }
     render();
   },
+  'run-done'() {
+    R.token++;
+    if ('speechSynthesis' in window) speechSynthesis.cancel();
+    if (R.opts.beep) beep('start');
+    endExercise(true);
+  },
+  'run-repeat'() {
+    const it = cur();
+    if (R.phase === 'speak') { R.token++; startReps(); }
+    speak(`${it.name}. ${it.text}`);
+  },
   'run-skip'() { if (R.phase === 'pause') beginExercise(); else { R.token++; endExercise(true); } },
   'run-abort'() {
     if (!confirm('Training abbrechen? Der Tag wird nicht als erledigt markiert.')) return;
@@ -990,7 +1064,7 @@ const actions = {
     S.exercises[id] = { id, name: 'Neue Übung', phase: 'work', min: 10, hw: 0, text: '' };
     save(); go(`#/uebung/${id}`);
   },
-  'ex-test'(d) { const e = S.exercises[d.id]; speak(`${e.name}. ${speakMin(e.min)}. ${e.text}`); },
+  'ex-test'(d) { const e = S.exercises[d.id]; speak(isRepsEx(e) ? `${e.name}. ${e.text}` : `${e.name}. ${speakMin(e.min)}. ${e.text}`); },
   'ex-apply'(d) {
     const e = S.exercises[d.id];
     if (!confirm(`In allen Tagen ${fmtMin(e.min)} und Handwechsel alle ${fmtMin(e.hw)} setzen?`)) return;

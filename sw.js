@@ -1,6 +1,6 @@
 // Service Worker: hält die App offline verfügbar und ermöglicht Updates per Hinweisbalken.
 // WICHTIG: Bei jeder neuen Version die Nummer in CACHE erhöhen, sonst wird kein Update erkannt.
-const CACHE = 'antrainieren-v9';
+const CACHE = 'antrainieren-v10';
 const FILES = ['./', 'index.html', 'anleitung.html', 'app.css', 'app.js', 'daten.js', 'manifest.webmanifest', 'icon-192.png', 'icon-512.png', 'icon-180.png'];
 
 // Neue Version herunterladen (am Browser-Zwischenspeicher vorbei), aber noch nicht aktivieren

@@ -77,11 +77,34 @@ function progDays() {
   });
   return out;
 }
-function dateOf(i) {
-  let off = 0;
-  for (const s of S.program.shifts) if (s.from <= i) off += s.days;
-  return addDays(S.program.startDate, i + off);
+// Ablauf statt fester Kalender: Der Plan geht immer dort weiter, wo zuletzt trainiert wurde.
+// Erledigte/übersprungene Tage behalten ihr echtes Datum. Ab dem zuletzt abgehakten Tag wird
+// vorausgeplant: Das nächste Training liegt frühestens heute, danach folgt Tag für Tag der Ablauf.
+// Fällt das Pferd ein paar Tage aus, muss nichts nachgeholt werden.
+function schedule() {
+  const days = progDays(), log = S.program.log, today = todayStr();
+  const dates = new Array(days.length);
+  let anchor = -1;
+  days.forEach(d => { if (log[d.i] && log[d.i].date) anchor = d.i; });
+  let last = addDays(S.program.startDate, -1);
+  for (let i = 0; i <= anchor; i++) {
+    // Abgehakte Tage: echtes Datum. Dazwischen liegen gebliebene Tage: einfach weitergezählt.
+    last = log[i] && log[i].date ? log[i].date : addDays(last, 1);
+    dates[i] = last;
+  }
+  // Ein übersprungener Tag kostet keinen Kalendertag, ein erledigter schon
+  let cursor = anchor < 0 ? S.program.startDate
+    : log[anchor].status === 'skipped' ? log[anchor].date : addDays(log[anchor].date, 1);
+  let first = true;
+  for (let i = anchor + 1; i < days.length; i++) {
+    if (first && !isRest(days[i].day)) { if (cursor < today) cursor = today; first = false; }
+    dates[i] = cursor;
+    cursor = addDays(cursor, 1);
+  }
+  return { dates, anchor };
 }
+const dateOf = i => schedule().dates[i];
+const anchorIdx = () => schedule().anchor;
 const validItems = day => day.items.filter(it => S.exercises[it.ex]);
 const isRepsEx = e => !!e && e.mode === 'reps';
 const isReps = it => isRepsEx(S.exercises[it.ex]);
@@ -93,14 +116,13 @@ function durText(items) {
   const n = items.filter(isReps).length;
   return `ca. ${fmtMin(dayMinutes(items))}${n ? ` + ${n} ${n === 1 ? 'Übung' : 'Übungen'} nach Anzahl` : ''}`;
 }
-function firstMissed(days, today) {
-  return days.find(d => !statusOf(d.i) && !isRest(d.day) && dateOf(d.i) < today);
-}
+// Nächster Trainingstag im Ablauf (nach dem zuletzt abgehakten Tag)
+const nextTraining = days => { const a = anchorIdx(); return days.find(d => d.i > a && !isRest(d.day)); };
 function dayState(d, today) {
   const st = statusOf(d.i), date = dateOf(d.i);
   if (st) return st;
   if (isRest(d.day)) return 'rest';
-  if (date < today) return 'missed';
+  if (d.i < anchorIdx()) return 'missed'; // ausgelassen, danach wurde schon weitertrainiert
   if (date === today) return 'today';
   return 'open';
 }
@@ -146,7 +168,7 @@ function itemsList(items, withText = true) {
 const STATE_BADGE = {
   done: '<span class="badge done">Erledigt ✓</span>',
   skipped: '<span class="badge skipped">Übersprungen</span>',
-  missed: '<span class="badge missed">Verpasst</span>',
+  missed: '<span class="badge missed">Ausgelassen</span>',
   today: '<span class="badge">Heute</span>',
   rest: '<span class="badge skipped">Ruhetag</span>',
   open: ''
@@ -172,25 +194,15 @@ function viewHome() {
   if (!days.length) {
     return `<div class="card"><h2>Kein Plan</h2><p>Dein Trainingsplan enthält keine Wochen. Füge unter <a href="#/einstellungen/plan">Einstellungen › Trainingsplan</a> Wochen hinzu.</p></div>`;
   }
-  const missed = firstMissed(days, today);
-  if (missed) {
-    h += `<div class="card banner">
-      <p class="eyebrow">Verpasst · ${fmtDate(dateOf(missed.i))}</p>
-      <h2>${esc(dayTitle(missed))}</h2>
-      <p class="note">Wenn du den Tag heute nachholst, verschieben sich alle folgenden Termine entsprechend.</p>
-      <div class="row">
-        <button class="btn primary grow" data-act="catchup" data-i="${missed.i}">Heute nachholen</button>
-        <button class="btn grow" data-act="skip" data-i="${missed.i}">Überspringen</button>
-      </div></div>`;
-  }
-  const todayDay = days.find(d => dateOf(d.i) === today);
-  const nextDay = days.find(d => dateOf(d.i) > today && !statusOf(d.i) && !isRest(d.day));
-  if (todayDay) {
-    h += dayCard(todayDay, `Heute · ${fmtDate(today)}`);
-    if (statusOf(todayDay.i) && nextDay) h += dayCard(nextDay, `Nächstes Training · ${fmtDate(dateOf(nextDay.i))}`, true);
-  } else if (nextDay) {
-    h += dayCard(nextDay, `Nächstes Training · ${fmtDate(dateOf(nextDay.i))}`);
-  } else if (!missed) {
+  const next = nextTraining(days), a = anchorIdx();
+  const doneToday = days.filter(d => statusOf(d.i) === 'done' && S.program.log[d.i].date === today).pop();
+  const restToday = days.find(d => d.i > a && isRest(d.day) && dateOf(d.i) === today);
+  const nextCard = compact => next ? dayCard(next, `Nächstes Training · ${dateOf(next.i) === today ? 'heute' : fmtDate(dateOf(next.i))}`, compact) : '';
+  if (doneToday) h += dayCard(doneToday, `Heute · ${fmtDate(today)}`) + nextCard(true);
+  else if (next && dateOf(next.i) === today) h += dayCard(next, `Heute · ${fmtDate(today)}`);
+  else if (restToday) h += dayCard(restToday, `Heute · ${fmtDate(today)}`) + nextCard(true);
+  else if (next) h += nextCard(false);
+  if (!next && !doneToday) {
     h += `<div class="card center"><h2>Plan abgeschlossen 🎉</h2>
       <p class="muted">Alle Trainingstage sind durch. Für das weiterführende Training kannst du unter Einstellungen neue Wochen anlegen und den Plan neu starten.</p>
       <a class="btn" href="#/einstellungen/plan">Zum Trainingsplan</a></div>`;
@@ -218,7 +230,7 @@ function dayCard(d, eyebrow, compact = false) {
 }
 
 function overview(days, today) {
-  const ref = days.find(d => dateOf(d.i) >= today) || days[days.length - 1];
+  const ref = nextTraining(days) || days[days.length - 1];
   const weeks = [];
   days.forEach(d => { (weeks[d.wi] = weeks[d.wi] || []).push(d); });
   let h = `<h3 class="eyebrow" style="margin:24px 4px 8px">Gesamter Plan</h3>`;
@@ -302,7 +314,6 @@ function dayActions(i, st) {
   if (st === 'done' || st === 'skipped') b.push(`<button class="btn grow" data-act="undo" data-i="${i}">Markierung zurücknehmen</button>`);
   else {
     b.push(`<button class="btn grow" data-act="done" data-i="${i}">Als erledigt markieren</button>`);
-    if (st === 'missed') b.push(`<button class="btn grow" data-act="catchup" data-i="${i}">Heute nachholen</button>`);
     if (st !== 'rest') b.push(`<button class="btn grow" data-act="skip" data-i="${i}">Überspringen</button>`);
   }
   return `<div class="row">${b.join('')}</div>`;
@@ -846,7 +857,7 @@ function viewPlan() {
   return `<div class="card">
     <label class="field"><span>Startdatum (Woche 1, Tag 1)</span><input type="date" value="${p.startDate || ''}" data-bind="prog.startDate" data-rr></label>
     ${days.length ? `<p class="muted small">Planende: ${fmtLong(dateOf(days.length - 1))} · ${done} Tage erledigt</p>` : ''}
-    <p class="note">Wird ein Trainingstag verpasst und du holst ihn nach, verschieben sich alle folgenden Termine automatisch.</p>
+    <p class="note">Der Plan läuft als Ablauf: Fällt ein Training aus, geht es beim nächsten Mal einfach am nächsten offenen Tag weiter. Die Termine danach rücken automatisch mit, nachholen ist nicht nötig.</p>
   </div>
   <div class="card"><h3>Wochen im Plan</h3>${rows || '<p class="muted">Noch keine Wochen.</p>'}
     <select data-change="prog-add" style="margin-top:8px"><option value="">＋ Woche anhängen …</option>
@@ -854,7 +865,7 @@ function viewPlan() {
     <p class="note">Achtung: Wenn du die Reihenfolge änderst, nachdem du schon trainiert hast, verrutschen die Häkchen. Am besten vorher „Neu starten“.</p>
   </div>
   <div class="card"><h3>Plan neu starten</h3>
-    <p class="note">Löscht alle Häkchen und Verschiebungen und beginnt ab dem gewählten Datum wieder bei Woche 1, Tag 1. Übungen und Wochen bleiben erhalten.</p>
+    <p class="note">Löscht alle Häkchen und beginnt ab dem gewählten Datum wieder bei Woche 1, Tag 1. Übungen und Wochen bleiben erhalten.</p>
     <label class="field"><span>Neues Startdatum</span><input type="date" id="restartdate" value="${todayStr()}"></label>
     <button class="btn danger" data-act="prog-restart">Neu starten</button>
   </div>`;

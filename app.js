@@ -22,7 +22,7 @@ function freshState() {
     weeks: clone(SEED_WEEKS),
     program: { startDate: null, weekIds: SEED_WEEKS.map(w => w.id), log: {}, shifts: [] },
     settings: { pauseSec: 60, speak: true, beep: true, announceSwitch: true, rate: 1, voice: '',
-                dim: true, lastBackup: '', firstUse: '', backupSnooze: '' }
+                dim: true, music: true, lastBackup: '', firstUse: '', backupSnooze: '' }
   };
 }
 function load() {
@@ -541,7 +541,16 @@ function viewRun() {
 let actx = null;
 // iPhone setzt die Tonausgabe nach Unterbrechungen (Sperren, Anruf, andere Audio-App) auf „interrupted“.
 // Darum bei jedem Zustand außer „running“ wieder aufwecken, und bei „closed“ neu anlegen.
+// Musik nebenbei: Standardmäßig unterbricht eine Web-App andere Audio-Apps (Spotify, Apple Music).
+// Mit Typ „transient“ spielt die App ihre Töne über die Musik (iPhone ab iOS 17, Safari).
+// Achtung iPhone: In diesem Modus muss der Stummschalter aus sein, sonst bleiben die Töne stumm.
+function applyAudioSession() {
+  try {
+    if (navigator.audioSession) navigator.audioSession.type = S.settings.music ? 'transient' : 'auto';
+  } catch (e) { /* nicht unterstützt */ }
+}
 function unlockAudio() {
+  applyAudioSession();
   try {
     if (actx && actx.state === 'closed') actx = null;
     actx = actx || new (window.AudioContext || window.webkitAudioContext)();
@@ -630,6 +639,7 @@ function speechText(t) {
 }
 function speak(text, onend) {
   if (!('speechSynthesis' in window)) { if (onend) onend(); return; }
+  applyAudioSession();
   speechSynthesis.cancel();
   text = speechText(text);
   const v = currentVoice();
@@ -691,6 +701,10 @@ function viewGeneral() {
     ${toggle('Hinweiston bei Start und Ende', 'set.beep', st.beep)}
     ${toggle('Handwechsel ansagen', 'set.announceSwitch', st.announceSwitch)}
     <p class="note">Du kannst das vor jedem Training noch einmal umstellen.</p>
+  </div>
+  <div class="card"><h3>Musik beim Training</h3>
+    ${toggle('Musik im Hintergrund weiterlaufen lassen', 'set.music', st.music, 'Töne und Ansagen kommen über die Musik, statt sie anzuhalten. iPhone: Stummschalter muss aus sein. Musik-App zuerst starten, dann das Training.')}
+    <p class="note">Wird die Musik trotzdem angehalten, liegt es meist an den Ansagen: Dann „Übungsbeschreibung vorlesen“ ausschalten, die Töne laufen weiter.</p>
   </div>
   <div class="card"><h3>Akku sparen</h3>
     ${toggle('Bildschirm im Training abdunkeln', 'set.dim', st.dim, 'Nach 20 Sekunden ohne Berührung wird der Bildschirm schwarz, nur Restzeit und Übung bleiben klein sichtbar. Ansagen und Töne laufen weiter. Ein Tipp holt die normale Ansicht zurück.')}

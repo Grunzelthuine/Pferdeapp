@@ -1009,7 +1009,8 @@ function loadPdfLib() {
   return pdfLib;
 }
 // Die Standardschrift im PDF kennt Umlaute, aber keine Emojis und Sonderzeichen außerhalb von Windows-1252
-const pdfText = t => String(t).replace(/[↔→]/g, '->').replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF€‚-„–—‘’•…]/g, '').trim();
+const pdfText = t => String(t).replace(/[↔→]/g, '->').replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF€‚-„–—‘’•…]/g, '').replace(/ +([,.!?;:])/g, '$1').replace(/ {2,}/g, ' ').trim();
+const fmtYear = iso => new Date(parseISO(iso)).toLocaleDateString('de-DE', { timeZone: 'UTC', weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
 async function notesPdf() {
   const { jsPDF } = await loadPdfLib();
   const doc = new jsPDF({ unit: 'mm', format: 'a4' });
@@ -1024,12 +1025,12 @@ async function notesPdf() {
   para('Trainingsnotizen', 20, 'bold');
   y += 1;
   const list = notesSorted().slice().reverse();
-  para(`${list.length} ${list.length === 1 ? 'Notiz' : 'Notizen'} · erstellt am ${fmtLong(todayStr())}`, 10, 'normal', 0, 110);
+  para(`${list.length} ${list.length === 1 ? 'Notiz' : 'Notizen'} · erstellt am ${fmtYear(todayStr())}`, 10, 'normal', 0, 110);
   y += 4;
   list.forEach(n => {
     need(18);
     doc.setDrawColor(200); doc.line(L, y, L + W, y); y += 6;
-    para(fmtLong(n.date), 9, 'bold', 0, 110);
+    para(fmtYear(n.date), 9, 'bold', 0, 110);
     y += 0.5;
     para(n.title, 13, 'bold');
     y += 1;

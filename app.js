@@ -21,6 +21,7 @@ function freshState() {
     exercises,
     weeks: clone(SEED_WEEKS),
     program: { startDate: null, weekIds: SEED_WEEKS.map(w => w.id), log: {}, shifts: [] },
+    notes: [],
     settings: { pauseSec: 60, speak: true, beep: true, announceSwitch: true, rate: 1, voice: '',
                 dim: true, music: true, lastBackup: '', firstUse: '', backupSnooze: '' }
   };
@@ -29,6 +30,7 @@ function load() {
   try { S = JSON.parse(localStorage.getItem(KEY)); } catch (e) { S = null; }
   if (!S || !S.exercises || !S.weeks || !S.program) S = freshState();
   S.settings = Object.assign(freshState().settings, S.settings);
+  if (!Array.isArray(S.notes)) S.notes = [];
   delete S.settings.lockscreen; // Sperrbildschirm-Test wurde wieder entfernt
   if (!S.settings.firstUse) { S.settings.firstUse = todayStr(); save(); }
   if (migrate()) save();
@@ -208,6 +210,7 @@ function viewHome() {
       <a class="btn" href="#/einstellungen/plan">Zum Trainingsplan</a></div>`;
   }
   if (backupDue()) h += backupCard();
+  if (notesSorted().length) h += `<a class="btn" style="width:100%;margin-top:4px" href="#/notizen">📝 Trainingsnotizen (${notesSorted().length})</a>`;
   h += overview(days, today);
   return h;
 }
@@ -306,6 +309,7 @@ function viewDay(i) {
     <div class="hint">Tipp: Lautstärke aufdrehen. Beim iPhone den Stummschalter ausschalten, sonst bleibt der Ton aus.</div>
     <button class="btn primary big" data-act="start-run">▶ Training starten</button>
     </div>`;
+  if (st === 'done' || noteFor(i)) h += noteEditor(i);
   h += `<div class="card">${dayActions(i, st)}</div>`;
   return h;
 }
@@ -506,8 +510,9 @@ function viewRun() {
   setHeader(R.title, null);
   if (R.phase === 'done') {
     return `<div class="card run"><p style="font-size:56px;margin:8px 0">🎉</p><h2>Geschafft!</h2>
-      <p class="muted">${esc(R.title)} ist als erledigt markiert.</p>
-      <button class="btn primary big" data-act="run-close">Zur Übersicht</button></div>`;
+      <p class="muted">${esc(R.title)} ist als erledigt markiert.</p></div>
+      ${noteEditor(R.i)}
+      <button class="btn primary big" data-act="run-close">Zur Übersicht</button>`;
   }
   const it = cur(), n = R.items.length;
   const isPause = R.phase === 'pause';
@@ -689,6 +694,7 @@ function viewSettings() {
     <li><a href="#/einstellungen/plan">📅 <span>Trainingsplan<span class="sub">Startdatum, Reihenfolge der Wochen</span></span></a></li>
     <li><a href="#/einstellungen/wochen">🗓 <span>Wochen<span class="sub">${S.weeks.length} Wochen · Tage mit Übungen belegen</span></span></a></li>
     <li><a href="#/einstellungen/uebungen">📋 <span>Übungen<span class="sub">${nEx} Übungen · Datenbank bearbeiten</span></span></a></li>
+    <li><a href="#/notizen">📝 <span>Notizen<span class="sub">${notesSorted().length} Trainingsnotizen · ansehen und exportieren</span></span></a></li>
     <li><a href="#/einstellungen/daten">💾 <span>Daten sichern<span class="sub">Sicherung, Wiederherstellen, Zurücksetzen</span></span></a></li>
     <li><a href="anleitung.html">❓ <span>Anleitung<span class="sub">Installieren und Bedienung</span></span></a></li>
   </ul></div>
@@ -904,7 +910,7 @@ function viewData() {
   setHeader('Daten sichern', '#/einstellungen');
   const lb = S.settings.lastBackup;
   return `<div class="card"><h3>Sicherung</h3>
-    <p class="note">Deine Daten liegen nur auf diesem Gerät. Die Sicherung enthält alles: Übungen mit Beschreibungen, Wochen, Trainingsplan, Fortschritt und Einstellungen.</p>
+    <p class="note">Deine Daten liegen nur auf diesem Gerät. Die Sicherung enthält alles: Übungen mit Beschreibungen, Wochen, Trainingsplan, Fortschritt, Notizen und Einstellungen.</p>
     <p><b>${lb ? `Letzte Sicherung: ${fmtLong(lb)} (${agoText(lb)})` : 'Noch keine Sicherung erstellt.'}</b></p>
     <div class="stack">
       ${canShareFiles() ? '<button class="btn primary big" data-act="share">📤 Sicherung teilen</button>' : ''}
@@ -931,6 +937,75 @@ function viewData() {
     <button class="btn danger" data-act="reset-all">Alles zurücksetzen</button></div>`;
 }
 
+/* ---------- Notizen ----------
+   Pro Trainingstag eine Notiz, dazu optional eine Notiz je Übung. Gespeichert wird mit Datum,
+   Tagesname und Übungsnamen, damit die Notizen auch nach „Plan neu starten“ lesbar bleiben. */
+const noteFor = i => S.notes.find(n => n.i === i && n.start === S.program.startDate);
+function noteGet(i) {
+  let n = noteFor(i);
+  if (!n) {
+    const d = progDays()[i];
+    const log = S.program.log[i];
+    n = { id: Date.now().toString(36), i, start: S.program.startDate, date: (log && log.date) || todayStr(),
+          title: d ? dayTitle(d) : '', text: '', ex: {} };
+    S.notes.push(n);
+  }
+  return n;
+}
+const noteEmpty = n => !n || (!n.text.trim() && !Object.values(n.ex).some(e => e.text.trim()));
+function noteEditor(i) {
+  const d = progDays()[i];
+  if (!d) return '';
+  const n = noteFor(i) || { text: '', ex: {} };
+  const exs = validItems(d.day).map(it => S.exercises[it.ex]).filter((e, k, a) => e && a.indexOf(e) === k && e.phase !== 'rest');
+  const exFilled = exs.some(e => n.ex[e.id] && n.ex[e.id].text.trim());
+  return `<div class="card"><h3>📝 Notiz zum Training</h3>
+    <textarea data-note="${i}" placeholder="Wie lief es? Stimmung, Boden, Wetter, Auffälligkeiten …">${esc(n.text)}</textarea>
+    ${exs.length ? `<details class="small" style="margin-top:10px" ${exFilled ? 'open' : ''}><summary style="cursor:pointer;font-weight:600">Notizen zu einzelnen Übungen</summary>
+      ${exs.map(e => `<label class="field" style="margin-top:10px"><span>${esc(e.name)}</span>
+        <textarea data-note="${i}" data-ex="${esc(e.id)}" style="min-height:64px" placeholder="z. B. linke Hand schwieriger">${esc((n.ex[e.id] && n.ex[e.id].text) || '')}</textarea></label>`).join('')}
+    </details>` : ''}
+    <p class="note" style="margin-bottom:0">Wird automatisch gespeichert. Alle Notizen findest du unter <a href="#/notizen">Notizen</a>.</p></div>`;
+}
+let noteSaveTimer;
+function noteInput(el) {
+  const n = noteGet(Number(el.dataset.note));
+  if (el.dataset.ex) {
+    const e = S.exercises[el.dataset.ex];
+    n.ex[el.dataset.ex] = { name: e ? e.name : el.dataset.ex, text: el.value };
+  } else n.text = el.value;
+  clearTimeout(noteSaveTimer);
+  noteSaveTimer = setTimeout(() => { S.notes = S.notes.filter(x => !noteEmpty(x)); save(); }, 400);
+}
+const notesSorted = () => S.notes.filter(n => !noteEmpty(n)).sort((a, b) => (b.date + b.id).localeCompare(a.date + a.id));
+const noteExList = n => Object.values(n.ex).filter(e => e.text.trim());
+function viewNotes() {
+  setHeader('Notizen', '#/');
+  const list = notesSorted();
+  let h = `<div class="card"><p class="note" style="margin-top:0">Notizen schreibst du nach dem Training auf dem „Geschafft“-Bildschirm oder später in der Ansicht des Trainingstags.</p>
+    ${list.length ? `<div class="row">${canShareFiles() ? '<button class="btn primary grow" data-act="notes-share">📤 Notizen teilen</button>' : ''}
+      <button class="btn grow ${canShareFiles() ? '' : 'primary'}" data-act="notes-export">⬇ Als Textdatei</button></div>` : '<p class="muted" style="margin:0">Noch keine Notizen.</p>'}</div>`;
+  list.forEach(n => {
+    const current = n.start === S.program.startDate && progDays()[n.i];
+    h += `<div class="card"><p class="eyebrow">${fmtLong(n.date)}</p>
+      <div class="row"><h2 class="grow">${esc(n.title)}</h2>${current ? `<a class="btn small" href="#/tag/${n.i}">Bearbeiten</a>` : ''}</div>
+      ${n.text.trim() ? `<p style="white-space:pre-wrap;margin:6px 0">${esc(n.text)}</p>` : ''}
+      ${noteExList(n).map(e => `<p class="small" style="white-space:pre-wrap;margin:6px 0"><b>${esc(e.name)}:</b> ${esc(e.text)}</p>`).join('')}
+    </div>`;
+  });
+  return h;
+}
+function notesFile() {
+  const lines = ['Antrainieren – Trainingsnotizen', `Stand: ${fmtLong(todayStr())}`, ''];
+  notesSorted().slice().reverse().forEach(n => {
+    lines.push(`${fmtLong(n.date)} – ${n.title}`);
+    if (n.text.trim()) lines.push(n.text.trim());
+    noteExList(n).forEach(e => lines.push(`  • ${e.name}: ${e.text.trim().replace(/\n/g, '\n    ')}`));
+    lines.push('');
+  });
+  return new File([lines.join('\n')], `antrainieren-notizen-${todayStr()}.txt`, { type: 'text/plain' });
+}
+
 /* ---------- Router ---------- */
 let lastRoute = '';
 function render() {
@@ -942,7 +1017,8 @@ function render() {
   else if (a === 'training') html = viewRun();
   else if (a === 'einstellungen') {
     html = ({ allgemein: viewGeneral, uebungen: viewExercises, wochen: viewWeeks, plan: viewPlan, daten: viewData }[b] || viewSettings)();
-  } else if (a === 'uebung') html = viewExercise(b);
+  } else if (a === 'notizen') html = viewNotes();
+  else if (a === 'uebung') html = viewExercise(b);
   else if (a === 'woche') html = viewWeek(b);
   else { go('#/'); return; }
   if (html === undefined) return;
@@ -1025,6 +1101,7 @@ document.addEventListener('change', ev => {
         if (!data.exercises || !data.weeks || !data.program) throw new Error();
         if (!confirm('Sicherung laden? Alle aktuellen Daten werden ersetzt.')) return;
         S = data; S.settings = Object.assign(freshState().settings, S.settings);
+        if (!Array.isArray(S.notes)) S.notes = [];
         migrate();
         if (!S.settings.firstUse) S.settings.firstUse = todayStr();
         prep = null; save(); toast('Sicherung geladen'); go('#/');
@@ -1035,6 +1112,7 @@ document.addEventListener('change', ev => {
 });
 document.addEventListener('input', ev => {
   const el = ev.target;
+  if (el.dataset.note !== undefined) return noteInput(el);
   if (!el.dataset.bind || el.dataset.type || el.tagName === 'SELECT') return;
   const [obj, key] = bindTarget(el.dataset.bind);
   if (obj) { obj[key] = el.value; save(); }
@@ -1192,6 +1270,17 @@ const actions = {
     navigator.share({ files: [file], title: 'Antrainieren-Sicherung' })
       .then(() => { save(); toast('Sicherung geteilt'); render(); })
       .catch(e => { S.settings.lastBackup = prev; if (e.name !== 'AbortError') toast('Teilen hat nicht geklappt'); });
+  },
+  'notes-export'() {
+    const file = notesFile(), a = document.createElement('a');
+    a.href = URL.createObjectURL(file); a.download = file.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  },
+  'notes-share'() {
+    const file = notesFile();
+    if (!canShareFiles() || !navigator.canShare({ files: [file] })) return actions['notes-export']();
+    navigator.share({ files: [file], title: 'Trainingsnotizen' }).catch(e => { if (e.name !== 'AbortError') toast('Teilen hat nicht geklappt'); });
   },
   'backup-now'() { canShareFiles() ? actions.share() : actions.export(); },
   'backup-later'() { S.settings.backupSnooze = todayStr(); save(); render(); },

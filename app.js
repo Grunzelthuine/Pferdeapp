@@ -983,8 +983,8 @@ function viewNotes() {
   setHeader('Notizen', '#/');
   const list = notesSorted();
   let h = `<div class="card"><p class="note" style="margin-top:0">Notizen schreibst du nach dem Training auf dem „Geschafft“-Bildschirm oder später in der Ansicht des Trainingstags.</p>
-    ${list.length ? `<div class="row">${canShareFiles() ? '<button class="btn primary grow" data-act="notes-share">📤 Notizen teilen</button>' : ''}
-      <button class="btn grow ${canShareFiles() ? '' : 'primary'}" data-act="notes-export">⬇ Als Textdatei</button></div>` : '<p class="muted" style="margin:0">Noch keine Notizen.</p>'}</div>`;
+    ${list.length ? `<div class="row">${canShareFiles() ? '<button class="btn primary grow" data-act="notes-share">📤 PDF teilen</button>' : ''}
+      <button class="btn grow ${canShareFiles() ? '' : 'primary'}" data-act="notes-export">⬇ PDF speichern</button></div>` : '<p class="muted" style="margin:0">Noch keine Notizen.</p>'}</div>`;
   list.forEach(n => {
     const current = n.start === S.program.startDate && progDays()[n.i];
     h += `<div class="card"><p class="eyebrow">${fmtLong(n.date)}</p>
@@ -995,15 +995,59 @@ function viewNotes() {
   });
   return h;
 }
-function notesFile() {
-  const lines = ['Antrainieren – Trainingsnotizen', `Stand: ${fmtLong(todayStr())}`, ''];
-  notesSorted().slice().reverse().forEach(n => {
-    lines.push(`${fmtLong(n.date)} – ${n.title}`);
-    if (n.text.trim()) lines.push(n.text.trim());
-    noteExList(n).forEach(e => lines.push(`  • ${e.name}: ${e.text.trim().replace(/\n/g, '\n    ')}`));
-    lines.push('');
+// PDF-Bibliothek erst beim Export nachladen (liegt im Offline-Speicher, klappt also auch im Stall)
+let pdfLib = null;
+function loadPdfLib() {
+  if (window.jspdf) return Promise.resolve(window.jspdf);
+  if (!pdfLib) pdfLib = new Promise((ok, fail) => {
+    const sc = document.createElement('script');
+    sc.src = 'vendor/jspdf.umd.min.js';
+    sc.onload = () => ok(window.jspdf);
+    sc.onerror = () => { pdfLib = null; fail(new Error('PDF-Bibliothek fehlt')); };
+    document.head.appendChild(sc);
   });
-  return new File([lines.join('\n')], `antrainieren-notizen-${todayStr()}.txt`, { type: 'text/plain' });
+  return pdfLib;
+}
+// Die Standardschrift im PDF kennt Umlaute, aber keine Emojis und Sonderzeichen außerhalb von Windows-1252
+const pdfText = t => String(t).replace(/[↔→]/g, '->').replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF€‚-„–—‘’•…]/g, '').trim();
+async function notesPdf() {
+  const { jsPDF } = await loadPdfLib();
+  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const L = 18, W = 174, BOTTOM = 280;
+  let y = 22;
+  const need = h => { if (y + h > BOTTOM) { doc.addPage(); y = 20; } };
+  const para = (text, size, style, indent = 0, color = 30) => {
+    doc.setFont('helvetica', style); doc.setFontSize(size); doc.setTextColor(color);
+    const lh = size * 0.45;
+    doc.splitTextToSize(pdfText(text), W - indent).forEach(line => { need(lh); doc.text(line, L + indent, y); y += lh; });
+  };
+  para('Trainingsnotizen', 20, 'bold');
+  y += 1;
+  const list = notesSorted().slice().reverse();
+  para(`${list.length} ${list.length === 1 ? 'Notiz' : 'Notizen'} · erstellt am ${fmtLong(todayStr())}`, 10, 'normal', 0, 110);
+  y += 4;
+  list.forEach(n => {
+    need(18);
+    doc.setDrawColor(200); doc.line(L, y, L + W, y); y += 6;
+    para(fmtLong(n.date), 9, 'bold', 0, 110);
+    y += 0.5;
+    para(n.title, 13, 'bold');
+    y += 1;
+    if (n.text.trim()) { para(n.text, 11, 'normal'); y += 1.5; }
+    noteExList(n).forEach(e => {
+      need(10);
+      para(e.name, 10.5, 'bold', 4, 60);
+      para(e.text, 10.5, 'normal', 4);
+      y += 1.5;
+    });
+    y += 3;
+  });
+  const pages = doc.getNumberOfPages();
+  for (let k = 1; k <= pages; k++) {
+    doc.setPage(k); doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(140);
+    doc.text(`Antrainieren · Seite ${k} von ${pages}`, L + W, 290, { align: 'right' });
+  }
+  return new File([doc.output('blob')], `trainingsnotizen-${todayStr()}.pdf`, { type: 'application/pdf' });
 }
 
 /* ---------- Router ---------- */
@@ -1271,14 +1315,17 @@ const actions = {
       .then(() => { save(); toast('Sicherung geteilt'); render(); })
       .catch(e => { S.settings.lastBackup = prev; if (e.name !== 'AbortError') toast('Teilen hat nicht geklappt'); });
   },
-  'notes-export'() {
-    const file = notesFile(), a = document.createElement('a');
-    a.href = URL.createObjectURL(file); a.download = file.name;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+  async 'notes-export'() {
+    try {
+      const file = await notesPdf(), a = document.createElement('a');
+      a.href = URL.createObjectURL(file); a.download = file.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 60000);
+    } catch (e) { toast('PDF konnte nicht erstellt werden'); }
   },
-  'notes-share'() {
-    const file = notesFile();
+  async 'notes-share'() {
+    let file;
+    try { file = await notesPdf(); } catch (e) { return toast('PDF konnte nicht erstellt werden'); }
     if (!canShareFiles() || !navigator.canShare({ files: [file] })) return actions['notes-export']();
     navigator.share({ files: [file], title: 'Trainingsnotizen' }).catch(e => { if (e.name !== 'AbortError') toast('Teilen hat nicht geklappt'); });
   },
